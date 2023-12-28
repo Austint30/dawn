@@ -41,6 +41,7 @@ target_link_libraries(dawn_sample_utils PUBLIC
     dawn_wire
     dawn_utils
     glfw
+    glm
 )
 
 add_executable(CppHelloTriangle "CppHelloTriangle.cpp")
@@ -63,3 +64,14 @@ add_executable(DawnInfo "DawnInfo.cpp")
 common_compile_options(DawnInfo)
 target_link_libraries(DawnInfo dawn_sample_utils)
 
+add_executable(CppHelloSquare "CppHelloSquare.cpp")
+common_compile_options(CppHelloSquare)
+target_link_libraries(CppHelloSquare dawn_sample_utils)
+
+add_executable(CppHelloCubes "CppHelloCubes.cpp")
+common_compile_options(CppHelloCubes)
+target_link_libraries(CppHelloCubes dawn_sample_utils)
+
+add_executable(CppHelloCircle "CppHelloCircle.cpp")
+common_compile_options(CppHelloCircle)
+target_link_libraries(CppHelloCircle dawn_sample_utils)

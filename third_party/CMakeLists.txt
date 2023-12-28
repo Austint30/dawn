@@ -143,3 +143,8 @@ if (NOT TARGET gmock AND ${TINT_BUILD_TESTS})
     set(gtest_force_shared_crt ON CACHE BOOL "Controls whether a shared run-time library should be used even when Google Test is built as static library" FORCE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/googletest EXCLUDE_FROM_ALL)
 endif()
+
+if (NOT TARGET glm OR ${DAWN_USE_GLM})
+    add_subdirectory(${DAWN_GLM_DIR} "${CMAKE_CURRENT_BINARY_DIR}/glm")
+    message(STATUS "Dawn: using GLM at ${DAWN_GLM_DIR}")
+endif()

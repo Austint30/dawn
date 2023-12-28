@@ -37,7 +37,16 @@ bool ShouldQuit();
 struct GLFWwindow;
 struct GLFWwindow* GetGLFWWindow();
 
-wgpu::Device CreateCppDawnDevice();
+struct CreateCppDawnDeviceOptionsWindow {
+    uint32_t width = 640;
+    uint32_t height = 640;
+};
+
+struct CreateCppDawnDeviceOptions {
+    CreateCppDawnDeviceOptionsWindow window;
+};
+
+wgpu::Device CreateCppDawnDevice(CreateCppDawnDeviceOptions* options = nullptr);
 wgpu::TextureFormat GetPreferredSwapChainTextureFormat();
 wgpu::SwapChain GetSwapChain();
 wgpu::TextureView CreateDefaultDepthStencilView(const wgpu::Device& device);

@@ -142,6 +142,7 @@ void initRender() {
     descriptor.cBuffers[0].attributeCount = 2;
     descriptor.cAttributes[0].offset = offsetof(Particle, pos);
     descriptor.cAttributes[0].format = wgpu::VertexFormat::Float32x2;
+    descriptor.cAttributes[0].format = wgpu::VertexFormat::Float32x2;
     descriptor.cAttributes[1].shaderLocation = 1;
     descriptor.cAttributes[1].offset = offsetof(Particle, vel);
     descriptor.cAttributes[1].format = wgpu::VertexFormat::Float32x2;

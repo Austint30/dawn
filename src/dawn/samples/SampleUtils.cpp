@@ -123,7 +123,7 @@ static dawn::utils::TerribleCommandBuffer* s2cBuf = nullptr;
 static constexpr uint32_t kWidth = 640;
 static constexpr uint32_t kHeight = 480;
 
-wgpu::Device CreateCppDawnDevice() {
+wgpu::Device CreateCppDawnDevice(CreateCppDawnDeviceOptions* options) {
     dawn::ScopedEnvironmentVar angleDefaultPlatform;
     if (dawn::GetEnvironmentVar("ANGLE_DEFAULT_PLATFORM").first.empty()) {
         angleDefaultPlatform.Set("ANGLE_DEFAULT_PLATFORM", "swiftshader");
@@ -134,10 +134,13 @@ wgpu::Device CreateCppDawnDevice() {
         return wgpu::Device();
     }
 
+    uint32_t windowWidth = options ? options->window.width : kWidth;
+    uint32_t windowHeight = options ? options->window.height : kHeight;
+
     // Create the test window with no client API.
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
-    window = glfwCreateWindow(kWidth, kHeight, "Dawn window", nullptr, nullptr);
+    window = glfwCreateWindow(windowWidth, windowHeight, "Dawn window", nullptr, nullptr);
     if (!window) {
         return wgpu::Device();
     }
@@ -146,11 +149,11 @@ wgpu::Device CreateCppDawnDevice() {
     instanceDescriptor.features.timedWaitAnyEnable = true;
     instance = std::make_unique<dawn::native::Instance>(&instanceDescriptor);
 
-    wgpu::RequestAdapterOptions options = {};
-    options.backendType = backendType;
+    wgpu::RequestAdapterOptions requestAdapterOptions = {};
+    requestAdapterOptions.backendType = backendType;
 
     // Get an adapter for the backend to use, and create the device.
-    auto adapters = instance->EnumerateAdapters(&options);
+    auto adapters = instance->EnumerateAdapters(&requestAdapterOptions);
     wgpu::DawnAdapterPropertiesPowerPreference power_props{};
     wgpu::AdapterProperties adapterProperties{};
     adapterProperties.nextInChain = &power_props;

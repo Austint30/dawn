@@ -290,6 +290,10 @@ deps = {
     'url': '{chromium_git}/chromium/src/base/allocator/partition_allocator.git@6f90cb04abb81942abaab7b63d34c02882208172',
     'condition': 'dawn_standalone',
   },
+  'third_party/glm': {
+    'url': 'https://github.com/g-truc/glm.git',
+    'condition': 'dawn_standalone'
+  }
 }
 
 hooks = [
