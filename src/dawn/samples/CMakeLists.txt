@@ -68,9 +68,9 @@ add_executable(CppHelloSquare "CppHelloSquare.cpp")
 common_compile_options(CppHelloSquare)
 target_link_libraries(CppHelloSquare dawn_sample_utils)
 
-add_executable(CppHelloCubes "CppHelloCubes.cpp")
-common_compile_options(CppHelloCubes)
-target_link_libraries(CppHelloCubes dawn_sample_utils)
+add_executable(CppHelloCube "CppHelloCube.cpp")
+common_compile_options(CppHelloCube)
+target_link_libraries(CppHelloCube dawn_sample_utils)
 
 add_executable(CppHelloCircle "CppHelloCircle.cpp")
 common_compile_options(CppHelloCircle)

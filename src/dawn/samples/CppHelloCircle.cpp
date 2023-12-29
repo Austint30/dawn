@@ -106,48 +106,19 @@ void initTextures() {
 
     // Initialize the texture with arbitrary data until we can load images
     std::vector<uint8_t> data(4 * 1024 * 1024, 0);
-    // 4* because of RGBA
     for (size_t i = 0; i < data.size(); ++i) {
-
-        uint8_t value = 0;
-
-        switch (i % 4) {
-            case 0:
-                // Red
-                value = i % 253;
-                break;
-            case 2:
-                // Blue
-                value = 253 - (i % 253);
-                break;
-        }
-
-        data[i] = static_cast<uint8_t>(value);
+        data[i] = static_cast<uint8_t>(i % 253);
     }
 
-    // AUS: Formats the data into a buffer.
     wgpu::Buffer stagingBuffer = dawn::utils::CreateBufferFromData(
         device, data.data(), static_cast<uint32_t>(data.size()), wgpu::BufferUsage::CopySrc);
-
-    // AUS: Copies the stagingBuffer (passes by value) to the ImageCopyBuffer struct.
-    //      Struct also accepts a layout. Which can be used to set the bytes per row.
     wgpu::ImageCopyBuffer imageCopyBuffer =
         dawn::utils::CreateImageCopyBuffer(stagingBuffer, 0, 4 * 1024);
-
-    // https://docs.rs/wgpu/latest/wgpu/type.ImageCopyTexture.html
-    // View of a texture which can be used to copy to/from a buffer/texture.
-    //  texture: &'a Texture    The texture to be copied to/from.
-    //  level: u32              The target mip level of the texture.
-    //  origin: Origin3d        The base texel of the texture in the selected mip_level.
-    //                          Together with the copy_size argument to copy functions, defines the sub-region of the texture to copy.
     wgpu::ImageCopyTexture imageCopyTexture =
         dawn::utils::CreateImageCopyTexture(texture, 0, {0, 0, 0});
-
     wgpu::Extent3D copySize = {1024, 1024, 1};
 
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-
-    // Copy the data from the buffer to the texture
     encoder.CopyBufferToTexture(&imageCopyBuffer, &imageCopyTexture, &copySize);
 
     wgpu::CommandBuffer copy = encoder.Finish();
