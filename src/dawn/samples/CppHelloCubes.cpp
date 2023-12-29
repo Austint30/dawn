@@ -25,7 +25,6 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <iostream>
 #include <glm/glm.hpp>
 #include <glm/gtx/transform.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -58,7 +57,7 @@ struct CubeData {
 };
 
 struct SceneState {
-    float sceneRot = 0;
+    float viewRotation = 0;
 };
 
 static SceneState sceneState;
@@ -222,20 +221,31 @@ void init() {
     initObjects(bgl);
 }
 
+glm::mat4 getViewProjection(){
+    glm::mat4 view, projection, rotation;
+
+    rotation = glm::rotate(sceneState.viewRotation, glm::vec3(0.0f, 1.0f, 0.0f));
+    view = glm::mat4(1.0f);
+
+    // Apply translation first, then rotation. This will make the camera orbit the center of the world.
+    view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f)) * rotation;
+
+    projection = glm::perspective(45.0f, 1.0f, 0.1f, 100.0f);
+
+    return projection * view;
+}
+
 void drawCube(wgpu::RenderPassEncoder pass, CubeData & _cubeData){
 
     pass.SetBindGroup(0, _cubeData.bindGroup);
 
-    glm::mat4 model, view, perspective, mvp;
+    glm::mat4 model, mvp, viewProjection;
 
-    model = glm::rotate(sceneState.sceneRot, glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::mat4(1.0f);
     model = glm::translate(model, _cubeData.pos);
 
-    view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f));
-
-    perspective = glm::perspective(45.0f, 1.0f, 0.1f, 100.0f);
-
-    mvp = perspective * view * model;
+    viewProjection = getViewProjection();
+    mvp = viewProjection * model;
 
     device.GetQueue().WriteBuffer(_cubeData.mvpBuffer, 0, &mvp, sizeof(mvp));
     pass.DrawIndexed(CUBE_INDICES);
@@ -249,7 +259,7 @@ void drawScene(wgpu::RenderPassEncoder pass){
 
 void updateScene(){
     // One full rotation in 8 seconds
-    sceneState.sceneRot += (float)(M_PIf*deltaTime)/8;
+    sceneState.viewRotation += (float)(M_PIf*deltaTime)/8;
 }
 
 struct {
@@ -264,8 +274,6 @@ void frame() {
     }
 
     wgpu::TextureView backbufferView = swapchain.GetCurrentTextureView();
-
-//    dawn::utils::ComboRenderPassDescriptor comboRenderPass({backbufferView}, depthStencilView);
 
     wgpu::RenderPassColorAttachment colorAttachment;
     colorAttachment.view = backbufferView;
