@@ -151,9 +151,6 @@ SanitizedResult Sanitize(const Program& in,
         manager.Add<ast::transform::SingleEntryPoint>();
         data.Add<ast::transform::SingleEntryPoint::Config>(entry_point);
     }
-    manager.Add<ast::transform::Renamer>();
-    data.Add<ast::transform::Renamer::Config>(ast::transform::Renamer::Target::kGlslKeywords,
-                                              /* preserve_unicode */ false);
 
     manager.Add<ast::transform::PreservePadding>();  // Must come before DirectVariableAccess
 
@@ -189,6 +186,8 @@ SanitizedResult Sanitize(const Program& in,
         polyfills.saturate = true;
         polyfills.texture_sample_base_clamp_to_edge_2d_f32 = true;
         polyfills.workgroup_uniform_load = true;
+        polyfills.dot_4x8_packed = true;
+        polyfills.pack_unpack_4x8 = true;
         data.Add<ast::transform::BuiltinPolyfill::Config>(polyfills);
         manager.Add<ast::transform::BuiltinPolyfill>();  // Must come before DirectVariableAccess
     }
@@ -264,7 +263,6 @@ bool ASTPrinter::Generate() {
             "GLSL", builder_.AST(), diagnostics_,
             Vector{
                 wgsl::Extension::kChromiumDisableUniformityAnalysis,
-                wgsl::Extension::kChromiumExperimentalDp4A,
                 wgsl::Extension::kChromiumExperimentalFullPtrParameters,
                 wgsl::Extension::kChromiumInternalDualSourceBlending,
                 wgsl::Extension::kChromiumExperimentalPushConstant,

@@ -48,7 +48,9 @@ IRToProgramTest::Result IRToProgramTest::Run() {
 
     result.ir = tint::core::ir::Disassemble(mod);
 
-    auto output_program = IRToProgram(mod);
+    ProgramOptions options;
+    options.allowed_features = AllowedFeatures::Everything();
+    auto output_program = IRToProgram(mod, options);
     if (!output_program.IsValid()) {
         result.err = output_program.Diagnostics().str();
         result.ast = Program::printer(output_program);
@@ -111,6 +113,153 @@ TEST_F(IRToProgramTest, SingleFunction_Parameters) {
     EXPECT_WGSL(R"(
 fn f(i : i32, u : u32) -> i32 {
   return i;
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_Compute) {
+    auto* fn = b.Function("f", ty.void_(), core::ir::Function::PipelineStage::kCompute,
+                          std::array{3u, 4u, 5u});
+
+    fn->Block()->Append(b.Return(fn));
+
+    EXPECT_WGSL(R"(
+@compute @workgroup_size(3, 4, 5)
+fn f() {
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_Fragment) {
+    auto* fn = b.Function("f", ty.void_(), core::ir::Function::PipelineStage::kFragment);
+
+    fn->Block()->Append(b.Return(fn));
+
+    EXPECT_WGSL(R"(
+@fragment
+fn f() {
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_Vertex) {
+    auto* fn = b.Function("f", ty.vec4<f32>(), core::ir::Function::PipelineStage::kVertex);
+    fn->SetReturnBuiltin(core::ir::Function::ReturnBuiltin::kPosition);
+
+    fn->Block()->Append(b.Return(fn, b.Splat(ty.vec4<f32>(), 0_f, 4)));
+
+    EXPECT_WGSL(R"(
+@vertex
+fn f() -> @builtin(position) vec4<f32> {
+  return vec4<f32>();
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_ReturnAttribute_FragDepth) {
+    auto* fn = b.Function("f", ty.f32(), core::ir::Function::PipelineStage::kFragment);
+    fn->SetReturnBuiltin(core::ir::Function::ReturnBuiltin::kFragDepth);
+
+    fn->Block()->Append(b.Return(fn, b.Constant(0.5_f)));
+
+    EXPECT_WGSL(R"(
+@fragment
+fn f() -> @builtin(frag_depth) f32 {
+  return 0.5f;
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_ReturnAttribute_SampleMask) {
+    auto* fn = b.Function("f", ty.u32(), core::ir::Function::PipelineStage::kFragment);
+    fn->SetReturnBuiltin(core::ir::Function::ReturnBuiltin::kSampleMask);
+
+    fn->Block()->Append(b.Return(fn, b.Constant(3_u)));
+
+    EXPECT_WGSL(R"(
+@fragment
+fn f() -> @builtin(sample_mask) u32 {
+  return 3u;
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_ReturnAttribute_Invariant) {
+    auto* fn = b.Function("f", ty.vec4<f32>(), core::ir::Function::PipelineStage::kVertex);
+    fn->SetReturnBuiltin(core::ir::Function::ReturnBuiltin::kPosition);
+    fn->SetReturnInvariant(true);
+
+    fn->Block()->Append(b.Return(fn, b.Splat(ty.vec4<f32>(), 0_f, 4)));
+
+    EXPECT_WGSL(R"(
+@vertex
+fn f() -> @builtin(position) @invariant vec4<f32> {
+  return vec4<f32>();
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_ReturnAttribute_Location) {
+    auto* fn = b.Function("f", ty.vec4<f32>(), core::ir::Function::PipelineStage::kFragment);
+    fn->SetReturnLocation(1, std::nullopt);
+
+    fn->Block()->Append(b.Return(fn, b.Splat(ty.vec4<f32>(), 0_f, 4)));
+
+    EXPECT_WGSL(R"(
+@fragment
+fn f() -> @location(1) vec4<f32> {
+  return vec4<f32>();
+}
+)");
+}
+
+namespace {
+core::ir::FunctionParam* MakeBuiltinParam(core::ir::Builder& b,
+                                          const core::type::Type* type,
+                                          enum core::ir::FunctionParam::Builtin builtin) {
+    auto* param = b.FunctionParam(type);
+    param->SetBuiltin(builtin);
+    return param;
+}
+}  // namespace
+
+TEST_F(IRToProgramTest, EntryPoint_ParameterAttribute_Compute) {
+    auto* fn = b.Function("f", ty.void_(), core::ir::Function::PipelineStage::kCompute,
+                          std::array{3u, 4u, 5u});
+    fn->SetParams({
+        MakeBuiltinParam(b, ty.vec3<u32>(), core::ir::FunctionParam::Builtin::kLocalInvocationId),
+        MakeBuiltinParam(b, ty.u32(), core::ir::FunctionParam::Builtin::kLocalInvocationIndex),
+        MakeBuiltinParam(b, ty.vec3<u32>(), core::ir::FunctionParam::Builtin::kGlobalInvocationId),
+        MakeBuiltinParam(b, ty.vec3<u32>(), core::ir::FunctionParam::Builtin::kWorkgroupId),
+        MakeBuiltinParam(b, ty.vec3<u32>(), core::ir::FunctionParam::Builtin::kNumWorkgroups),
+        MakeBuiltinParam(b, ty.u32(), core::ir::FunctionParam::Builtin::kSubgroupInvocationId),
+        MakeBuiltinParam(b, ty.u32(), core::ir::FunctionParam::Builtin::kSubgroupSize),
+    });
+
+    fn->Block()->Append(b.Return(fn));
+
+    EXPECT_WGSL(R"(
+enable chromium_experimental_subgroups;
+
+@compute @workgroup_size(3, 4, 5)
+fn f(@builtin(local_invocation_id) v : vec3<u32>, @builtin(local_invocation_index) v_1 : u32, @builtin(global_invocation_id) v_2 : vec3<u32>, @builtin(workgroup_id) v_3 : vec3<u32>, @builtin(num_workgroups) v_4 : vec3<u32>, @builtin(subgroup_invocation_id) v_5 : u32, @builtin(subgroup_size) v_6 : u32) {
+}
+)");
+}
+
+TEST_F(IRToProgramTest, EntryPoint_ParameterAttribute_Fragment) {
+    auto* fn = b.Function("f", ty.void_(), core::ir::Function::PipelineStage::kFragment);
+    fn->SetParams({
+        MakeBuiltinParam(b, ty.bool_(), core::ir::FunctionParam::Builtin::kFrontFacing),
+        MakeBuiltinParam(b, ty.u32(), core::ir::FunctionParam::Builtin::kSampleIndex),
+        MakeBuiltinParam(b, ty.u32(), core::ir::FunctionParam::Builtin::kSampleMask),
+    });
+
+    fn->Block()->Append(b.Return(fn));
+
+    EXPECT_WGSL(R"(
+@fragment
+fn f(@builtin(front_facing) v : bool, @builtin(sample_index) v_1 : u32, @builtin(sample_mask) v_2 : u32) {
 }
 )");
 }
@@ -1870,11 +2019,11 @@ TEST_F(IRToProgramTest, FunctionScopeVar_Chained) {
         auto* va = b.Var("a", ty.ptr<function, i32>());
         va->SetInitializer(b.Constant(42_i));
 
-        auto* la = b.Load(va)->Result();
+        auto* la = b.Load(va)->Result(0);
         auto* vb = b.Var("b", ty.ptr<function, i32>());
         vb->SetInitializer(la);
 
-        auto* lb = b.Load(vb)->Result();
+        auto* lb = b.Load(vb)->Result(0);
         auto* vc = b.Var("c", ty.ptr<function, i32>());
         vc->SetInitializer(lb);
 
@@ -2671,7 +2820,7 @@ TEST_F(IRToProgramTest, For_CallInInitCondCont) {
         auto* loop = b.Loop();
 
         b.Append(loop->Initializer(), [&] {
-            auto* n_0 = b.Call(ty.i32(), fn_n, 0_i)->Result();
+            auto* n_0 = b.Call(ty.i32(), fn_n, 0_i)->Result(0);
             auto* i = b.Var("i", ty.ptr<function, i32>());
             i->SetInitializer(n_0);
             b.NextIteration(loop);

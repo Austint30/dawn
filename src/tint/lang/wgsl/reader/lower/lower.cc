@@ -105,6 +105,8 @@ core::BuiltinFn Convert(wgsl::BuiltinFn fn) {
         CASE(kPack2X16Unorm)
         CASE(kPack4X8Snorm)
         CASE(kPack4X8Unorm)
+        CASE(kPack4XI8)
+        CASE(kPack4XU8)
         CASE(kPow)
         CASE(kQuantizeToF16)
         CASE(kRadians)
@@ -191,7 +193,7 @@ Result<SuccessType> Lower(core::ir::Module& mod) {
                     b.InsertBefore(call, [&] {
                         b.Call(ty.void_(), core::BuiltinFn::kWorkgroupBarrier);
                         auto* load = b.Load(call->Args()[0]);
-                        call->Result()->ReplaceAllUsesWith(load->Result());
+                        call->Result(0)->ReplaceAllUsesWith(load->Result(0));
                         b.Call(ty.void_(), core::BuiltinFn::kWorkgroupBarrier);
                     });
                     break;
@@ -199,7 +201,7 @@ Result<SuccessType> Lower(core::ir::Module& mod) {
                 default: {
                     Vector<core::ir::Value*, 8> args(call->Args());
                     auto* replacement = mod.instructions.Create<core::ir::CoreBuiltinCall>(
-                        call->Result(), Convert(call->Func()), std::move(args));
+                        call->Result(0), Convert(call->Func()), std::move(args));
                     call->ReplaceWith(replacement);
                     call->ClearResults();
                     break;

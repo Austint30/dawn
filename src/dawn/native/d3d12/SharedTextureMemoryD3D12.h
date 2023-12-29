@@ -53,13 +53,14 @@ class SharedTextureMemory final : public d3d::SharedTextureMemory {
 
     void DestroyImpl() override;
 
-    ResultOrError<Ref<TextureBase>> CreateTextureImpl(const TextureDescriptor* descriptor) override;
+    ResultOrError<Ref<TextureBase>> CreateTextureImpl(
+        const UnpackedPtr<TextureDescriptor>& descriptor) override;
 
     ResultOrError<Ref<SharedFenceBase>> CreateFenceImpl(
         const SharedFenceDXGISharedHandleDescriptor* desc) override;
 
     MaybeError BeginAccessImpl(TextureBase* texture,
-                               const BeginAccessDescriptor* descriptor) override;
+                               const UnpackedPtr<BeginAccessDescriptor>& descriptor) override;
 
     ComPtr<ID3D12Resource> mResource;
 };

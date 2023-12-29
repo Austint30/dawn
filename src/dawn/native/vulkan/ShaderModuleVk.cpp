@@ -70,6 +70,9 @@ bool TransformedShaderModuleCacheKey::operator==(
     if (!std::equal(constants.begin(), constants.end(), other.constants.begin())) {
         return false;
     }
+    if (maxSubgroupSizeForFullSubgroups != other.maxSubgroupSizeForFullSubgroups) {
+        return false;
+    }
     return true;
 }
 
@@ -153,7 +156,7 @@ class ShaderModule::ConcurrentTransformedShaderModuleCache {
 // static
 ResultOrError<Ref<ShaderModule>> ShaderModule::Create(
     Device* device,
-    const ShaderModuleDescriptor* descriptor,
+    const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
     ShaderModuleParseResult* parseResult,
     OwnedCompilationMessages* compilationMessages) {
     Ref<ShaderModule> module = AcquireRef(new ShaderModule(device, descriptor));
@@ -161,7 +164,7 @@ ResultOrError<Ref<ShaderModule>> ShaderModule::Create(
     return module;
 }
 
-ShaderModule::ShaderModule(Device* device, const ShaderModuleDescriptor* descriptor)
+ShaderModule::ShaderModule(Device* device, const UnpackedPtr<ShaderModuleDescriptor>& descriptor)
     : ShaderModuleBase(device, descriptor),
       mTransformedShaderModuleCache(
           std::make_unique<ConcurrentTransformedShaderModuleCache>(device)) {}
@@ -191,7 +194,8 @@ ShaderModule::~ShaderModule() = default;
     X(bool, disableSymbolRenaming)                                                               \
     X(tint::spirv::writer::Options, tintOptions)                                                 \
     X(bool, use_tint_ir)                                                                         \
-    X(CacheKey::UnsafeUnkeyedValue<dawn::platform::Platform*>, platform)
+    X(CacheKey::UnsafeUnkeyedValue<dawn::platform::Platform*>, platform)                         \
+    X(std::optional<uint32_t>, maxSubgroupSizeForFullSubgroups)
 
 DAWN_MAKE_CACHE_REQUEST(SpirvCompilationRequest, SPIRV_COMPILATION_REQUEST_MEMBERS);
 #undef SPIRV_COMPILATION_REQUEST_MEMBERS
@@ -202,7 +206,8 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
     SingleShaderStage stage,
     const ProgrammableStage& programmableStage,
     const PipelineLayout* layout,
-    bool clampFragDepth) {
+    bool clampFragDepth,
+    std::optional<uint32_t> maxSubgroupSizeForFullSubgroups) {
     TRACE_EVENT0(GetDevice()->GetPlatform(), General, "ShaderModuleVk::GetHandleAndSpirv");
 
     // If the shader was destroyed, we should never call this function.
@@ -212,7 +217,8 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
 
     // Check to see if we have the handle and spirv cached already.
     auto cacheKey = TransformedShaderModuleCacheKey{layout, programmableStage.entryPoint.c_str(),
-                                                    programmableStage.constants};
+                                                    programmableStage.constants,
+                                                    maxSubgroupSizeForFullSubgroups};
     auto handleAndSpirv = mTransformedShaderModuleCache->Find(cacheKey);
     if (handleAndSpirv.has_value()) {
         return std::move(*handleAndSpirv);
@@ -310,6 +316,7 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
     req.disableSymbolRenaming = GetDevice()->IsToggleEnabled(Toggle::DisableSymbolRenaming);
     req.platform = UnsafeUnkeyedValue(GetDevice()->GetPlatform());
     req.substituteOverrideConfig = std::move(substituteOverrideConfig);
+    req.maxSubgroupSizeForFullSubgroups = maxSubgroupSizeForFullSubgroups;
 
     req.tintOptions.clamp_frag_depth = clampFragDepth;
     req.tintOptions.disable_robustness = !GetDevice()->IsRobustnessEnabled();
@@ -325,6 +332,8 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
     // transform as unsized arrays can only be declared on storage address space.
     req.tintOptions.disable_runtime_sized_array_index_clamping =
         GetDevice()->IsToggleEnabled(Toggle::VulkanUseBufferRobustAccess2);
+    req.tintOptions.polyfill_dot_4x8_packed =
+        GetDevice()->IsToggleEnabled(Toggle::PolyFillPacked4x8DotProduct);
     req.use_tint_ir = GetDevice()->IsToggleEnabled(Toggle::UseTintIR);
 
     // Set subgroup uniform control flow flag for subgroup experiment, if device has
@@ -397,7 +406,8 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
             if (r.stage == SingleShaderStage::Compute) {
                 Extent3D _;
                 DAWN_TRY_ASSIGN(_, ValidateComputeStageWorkgroupSize(
-                                       program, remappedEntryPoint.c_str(), r.limits));
+                                       program, remappedEntryPoint.c_str(), r.limits,
+                                       r.maxSubgroupSizeForFullSubgroups));
             }
 
             TRACE_EVENT0(r.platform.UnsafeGetValue(), General, "tint::spirv::writer::Generate()");

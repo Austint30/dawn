@@ -545,14 +545,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 }  // namespace texture_constexpr_args
 
-// TODO(crbug.com/tint/1497): Update or remove ResolverDP4aExtensionValidationTest when the
-// experimental extension chromium_experimental_dp4a is not needed.
-using ResolverDP4aExtensionValidationTest = ResolverTest;
+using ResolverPacked4x8IntegerDotProductValidationTest = ResolverTest;
 
-TEST_F(ResolverDP4aExtensionValidationTest, Dot4I8PackedWithExtension) {
-    // enable chromium_experimental_dp4a;
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Dot4I8Packed) {
     // fn func { return dot4I8Packed(1u, 2u); }
-    Enable(wgsl::Extension::kChromiumExperimentalDp4A);
+    Require(wgsl::LanguageFeature::kPacked4X8IntegerDotProduct);
 
     Func("func", tint::Empty, ty.i32(),
          Vector{
@@ -563,7 +560,7 @@ TEST_F(ResolverDP4aExtensionValidationTest, Dot4I8PackedWithExtension) {
     EXPECT_TRUE(r()->Resolve());
 }
 
-TEST_F(ResolverDP4aExtensionValidationTest, Dot4I8PackedWithoutExtension) {
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Dot4I8Packed_FeatureDisallowed) {
     // fn func { return dot4I8Packed(1u, 2u); }
     Func("func", tint::Empty, ty.i32(),
          Vector{
@@ -571,16 +568,17 @@ TEST_F(ResolverDP4aExtensionValidationTest, Dot4I8PackedWithoutExtension) {
                          Vector{Expr(1_u), Expr(2_u)})),
          });
 
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(
-        r()->error(),
-        R"(12:34 error: cannot call built-in function 'dot4I8Packed' without extension chromium_experimental_dp4a)");
+    auto resolver = Resolver(this, {});
+    EXPECT_FALSE(resolver.Resolve());
+    EXPECT_EQ(resolver.error(),
+              "12:34 error: built-in function 'dot4I8Packed' requires the "
+              "packed_4x8_integer_dot_product language feature, which is not allowed in the "
+              "current environment");
 }
 
-TEST_F(ResolverDP4aExtensionValidationTest, Dot4U8PackedWithExtension) {
-    // enable chromium_experimental_dp4a;
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Dot4U8Packed) {
     // fn func { return dot4U8Packed(1u, 2u); }
-    Enable(wgsl::Extension::kChromiumExperimentalDp4A);
+    Require(wgsl::LanguageFeature::kPacked4X8IntegerDotProduct);
 
     Func("func", tint::Empty, ty.u32(),
          Vector{
@@ -591,7 +589,7 @@ TEST_F(ResolverDP4aExtensionValidationTest, Dot4U8PackedWithExtension) {
     EXPECT_TRUE(r()->Resolve());
 }
 
-TEST_F(ResolverDP4aExtensionValidationTest, Dot4U8PackedWithoutExtension) {
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Dot4U8Packed_FeatureDisallowed) {
     // fn func { return dot4U8Packed(1u, 2u); }
     Func("func", tint::Empty, ty.u32(),
          Vector{
@@ -599,10 +597,66 @@ TEST_F(ResolverDP4aExtensionValidationTest, Dot4U8PackedWithoutExtension) {
                          Vector{Expr(1_u), Expr(2_u)})),
          });
 
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(
-        r()->error(),
-        R"(12:34 error: cannot call built-in function 'dot4U8Packed' without extension chromium_experimental_dp4a)");
+    auto resolver = Resolver(this, {});
+    EXPECT_FALSE(resolver.Resolve());
+    EXPECT_EQ(resolver.error(),
+              "12:34 error: built-in function 'dot4U8Packed' requires the "
+              "packed_4x8_integer_dot_product language feature, which is not allowed in the "
+              "current environment");
+}
+
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Pack4xI8) {
+    // fn func { return pack4xI8(vec4i()); }
+    Require(wgsl::LanguageFeature::kPacked4X8IntegerDotProduct);
+
+    Func("func", tint::Empty, ty.u32(),
+         Vector{
+             Return(Call(Source{Source::Location{12, 34}}, "pack4xI8", Call<vec4<i32>>())),
+         });
+
+    EXPECT_TRUE(r()->Resolve());
+}
+
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Pack4xI8_FeatureDisallowed) {
+    // fn func { return pack4xI8(vec4i()); }
+    Func("func", tint::Empty, ty.u32(),
+         Vector{
+             Return(Call(Source{Source::Location{12, 34}}, "pack4xI8", Call<vec4<i32>>())),
+         });
+
+    auto resolver = Resolver(this, {});
+    EXPECT_FALSE(resolver.Resolve());
+    EXPECT_EQ(resolver.error(),
+              "12:34 error: built-in function 'pack4xI8' requires the "
+              "packed_4x8_integer_dot_product language feature, which is not allowed in the "
+              "current environment");
+}
+
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Pack4xU8) {
+    // fn func { return pack4xU8(vec4u()); }
+    Require(wgsl::LanguageFeature::kPacked4X8IntegerDotProduct);
+
+    Func("func", tint::Empty, ty.u32(),
+         Vector{
+             Return(Call(Source{Source::Location{12, 34}}, "pack4xU8", Call<vec4<u32>>())),
+         });
+
+    EXPECT_TRUE(r()->Resolve());
+}
+
+TEST_F(ResolverPacked4x8IntegerDotProductValidationTest, Pack4xU8_FeatureDisallowed) {
+    // fn func { return pack4xU8(vec4u()); }
+    Func("func", tint::Empty, ty.u32(),
+         Vector{
+             Return(Call(Source{Source::Location{12, 34}}, "pack4xU8", Call<vec4<u32>>())),
+         });
+
+    auto resolver = Resolver(this, {});
+    EXPECT_FALSE(resolver.Resolve());
+    EXPECT_EQ(resolver.error(),
+              "12:34 error: built-in function 'pack4xU8' requires the "
+              "packed_4x8_integer_dot_product language feature, which is not allowed in the "
+              "current environment");
 }
 
 TEST_F(ResolverBuiltinValidationTest, WorkgroupUniformLoad_WrongAddressSpace) {

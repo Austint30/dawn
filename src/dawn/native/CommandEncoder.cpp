@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "dawn/common/BitSetIterator.h"
+#include "dawn/common/Enumerator.h"
 #include "dawn/common/Math.h"
 #include "dawn/native/ApplyClearColorValueWithDrawHelper.h"
 #include "dawn/native/BindGroup.h"
@@ -112,7 +113,7 @@ class RenderPassValidationState final : public NonMovable {
     // attachment in the render pass descriptor.
     MaybeError AddAttachment(const TextureViewBase* attachment,
                              AttachmentType attachmentType,
-                             uint32_t depthSlice = WGPU_DEPTH_SLICE_UNDEFINED) {
+                             uint32_t depthSlice = wgpu::kDepthSliceUndefined) {
         if (attachment == nullptr) {
             return {};
         }
@@ -167,9 +168,7 @@ class RenderPassValidationState final : public NonMovable {
             DAWN_ASSERT(attachment->GetBaseArrayLayer() == 0);
             record.depthOrArrayLayer = depthSlice;
         } else {
-            // TODO(dawn:1020): Assert depthSlice should be the 'WGPU_DEPTH_SLICE_UNDEFINED' value
-            // if the attachment is a non-3d texture view after it's initialized correctly in Blink.
-            // DAWN_ASSERT(depthSlice == WGPU_DEPTH_SLICE_UNDEFINED);
+            DAWN_ASSERT(depthSlice == wgpu::kDepthSliceUndefined);
             record.depthOrArrayLayer = attachment->GetBaseArrayLayer();
         }
 
@@ -355,16 +354,15 @@ MaybeError ValidateResolveTarget(const DeviceBase* device,
 MaybeError ValidateColorAttachmentDepthSlice(const TextureViewBase* attachment,
                                              uint32_t depthSlice) {
     if (attachment->GetDimension() != wgpu::TextureViewDimension::e3D) {
-        // TODO(dawn:1020): Validate depthSlice must not set for non-3d attachments. The depthSlice
-        // from WebGPU is not the 'WGPU_DEPTH_SLICE_UNDEFINED' value if it's not defined, we need to
-        // initialize it in Blink first, otherwise it will always be validated as set.
+        DAWN_INVALID_IF(depthSlice != wgpu::kDepthSliceUndefined,
+                        "depthSlice (%u) is defined for a non-3D attachment (%s).", depthSlice,
+                        attachment);
         return {};
     }
 
-    DAWN_INVALID_IF(depthSlice == WGPU_DEPTH_SLICE_UNDEFINED,
-                    "depthSlice (%u) must be set and must not be undefined value (%u) for a 3D "
-                    "attachment (%s).",
-                    depthSlice, WGPU_DEPTH_SLICE_UNDEFINED, attachment);
+    DAWN_INVALID_IF(depthSlice == wgpu::kDepthSliceUndefined,
+                    "depthSlice (%u) for a 3D attachment (%s) is undefined.", depthSlice,
+                    attachment);
 
     const Extent3D& attachmentSize = attachment->GetSingleSubresourceVirtualSize();
     DAWN_INVALID_IF(depthSlice >= attachmentSize.depthOrArrayLayers,
@@ -422,12 +420,11 @@ MaybeError ValidateRenderPassColorAttachment(DeviceBase* device,
         return {};
     }
 
-    DAWN_TRY(ValidateSingleSType(colorAttachment.nextInChain,
-                                 wgpu::SType::DawnRenderPassColorAttachmentRenderToSingleSampled));
+    UnpackedPtr<RenderPassColorAttachment> unpacked;
+    DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpack(&colorAttachment));
 
-    const DawnRenderPassColorAttachmentRenderToSingleSampled* msaaRenderToSingleSampledDesc =
-        nullptr;
-    FindInChain(colorAttachment.nextInChain, &msaaRenderToSingleSampledDesc);
+    const auto* msaaRenderToSingleSampledDesc =
+        unpacked.Get<DawnRenderPassColorAttachmentRenderToSingleSampled>();
     if (msaaRenderToSingleSampledDesc) {
         DAWN_TRY(ValidateColorAttachmentRenderToSingleSampled(device, colorAttachment,
                                                               msaaRenderToSingleSampledDesc));
@@ -633,13 +630,14 @@ MaybeError ValidateRenderPassPLS(DeviceBase* device,
                            {attachments->data(), attachments->size()});
 }
 
-MaybeError ValidateRenderPassDescriptor(DeviceBase* device,
-                                        const RenderPassDescriptor* descriptor,
-                                        UsageValidationMode usageValidationMode,
-                                        RenderPassValidationState* validationState) {
-    DAWN_TRY(
-        ValidateSTypes(descriptor->nextInChain, {{wgpu::SType::RenderPassDescriptorMaxDrawCount},
-                                                 {wgpu::SType::RenderPassPixelLocalStorage}}));
+ResultOrError<UnpackedPtr<RenderPassDescriptor>> ValidateRenderPassDescriptor(
+    DeviceBase* device,
+    const RenderPassDescriptor* rawDescriptor,
+    UsageValidationMode usageValidationMode,
+    RenderPassValidationState* validationState) {
+    UnpackedPtr<RenderPassDescriptor> descriptor;
+    DAWN_TRY_ASSIGN_CONTEXT(descriptor, ValidateAndUnpack(rawDescriptor),
+                            "validating chained structs.");
 
     uint32_t maxColorAttachments = device->GetLimits().v1.maxColorAttachments;
     DAWN_INVALID_IF(
@@ -647,13 +645,15 @@ MaybeError ValidateRenderPassDescriptor(DeviceBase* device,
         "Color attachment count (%u) exceeds the maximum number of color attachments (%u).",
         descriptor->colorAttachmentCount, maxColorAttachments);
 
+    auto colorAttachments = ityp::SpanFromUntyped<ColorAttachmentIndex>(
+        descriptor->colorAttachments, descriptor->colorAttachmentCount);
     ColorAttachmentFormats colorAttachmentFormats;
-    for (uint32_t i = 0; i < descriptor->colorAttachmentCount; ++i) {
-        DAWN_TRY_CONTEXT(ValidateRenderPassColorAttachment(device, descriptor->colorAttachments[i],
-                                                           usageValidationMode, validationState),
+    for (auto [i, attachment] : Enumerate(colorAttachments)) {
+        DAWN_TRY_CONTEXT(ValidateRenderPassColorAttachment(device, attachment, usageValidationMode,
+                                                           validationState),
                          "validating colorAttachments[%u].", i);
-        if (descriptor->colorAttachments[i].view) {
-            colorAttachmentFormats->push_back(&descriptor->colorAttachments[i].view->GetFormat());
+        if (attachment.view) {
+            colorAttachmentFormats->push_back(&attachment.view->GetFormat());
         }
     }
     DAWN_TRY_CONTEXT(ValidateColorAttachmentBytesPerSample(device, colorAttachmentFormats),
@@ -686,8 +686,7 @@ MaybeError ValidateRenderPassDescriptor(DeviceBase* device,
     }
 
     // Validation for any pixel local storage.
-    const RenderPassPixelLocalStorage* pls = nullptr;
-    FindInChain(descriptor->nextInChain, &pls);
+    auto pls = descriptor.Get<RenderPassPixelLocalStorage>();
     if (pls != nullptr) {
         DAWN_TRY(ValidateRenderPassPLS(device, pls, usageValidationMode, validationState));
     }
@@ -706,7 +705,7 @@ MaybeError ValidateRenderPassDescriptor(DeviceBase* device,
                         "For now PLS is invalid to use with MSAARenderToSingleSampled.");
     }
 
-    return {};
+    return descriptor;
 }
 
 MaybeError ValidateComputePassDescriptor(const DeviceBase* device,
@@ -913,23 +912,23 @@ Color ClampClearColorValueToLegalRange(const Color& originalColor, const Format&
             std::clamp(originalColor.a, minValue, maxValue)};
 }
 
-MaybeError ValidateCommandEncoderDescriptor(const DeviceBase* device,
-                                            const CommandEncoderDescriptor* descriptor) {
-    DAWN_TRY(ValidateSingleSType(descriptor->nextInChain,
-                                 wgpu::SType::DawnEncoderInternalUsageDescriptor));
+ResultOrError<UnpackedPtr<CommandEncoderDescriptor>> ValidateCommandEncoderDescriptor(
+    const DeviceBase* device,
+    const CommandEncoderDescriptor* descriptor) {
+    UnpackedPtr<CommandEncoderDescriptor> unpacked;
+    DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpack(descriptor));
 
-    const DawnEncoderInternalUsageDescriptor* internalUsageDesc = nullptr;
-    FindInChain(descriptor->nextInChain, &internalUsageDesc);
-
+    const auto* internalUsageDesc = unpacked.Get<DawnEncoderInternalUsageDescriptor>();
     DAWN_INVALID_IF(internalUsageDesc != nullptr &&
                         !device->APIHasFeature(wgpu::FeatureName::DawnInternalUsages),
                     "%s is not available.", wgpu::FeatureName::DawnInternalUsages);
-    return {};
+    return unpacked;
 }
 
 // static
-Ref<CommandEncoder> CommandEncoder::Create(DeviceBase* device,
-                                           const CommandEncoderDescriptor* descriptor) {
+Ref<CommandEncoder> CommandEncoder::Create(
+    DeviceBase* device,
+    const UnpackedPtr<CommandEncoderDescriptor>& descriptor) {
     return AcquireRef(new CommandEncoder(device, descriptor));
 }
 
@@ -938,13 +937,12 @@ CommandEncoder* CommandEncoder::MakeError(DeviceBase* device, const char* label)
     return new CommandEncoder(device, ObjectBase::kError, label);
 }
 
-CommandEncoder::CommandEncoder(DeviceBase* device, const CommandEncoderDescriptor* descriptor)
+CommandEncoder::CommandEncoder(DeviceBase* device,
+                               const UnpackedPtr<CommandEncoderDescriptor>& descriptor)
     : ApiObjectBase(device, descriptor->label), mEncodingContext(device, this) {
     GetObjectTrackingList()->Track(this);
 
-    const DawnEncoderInternalUsageDescriptor* internalUsageDesc = nullptr;
-    FindInChain(descriptor->nextInChain, &internalUsageDesc);
-
+    auto* internalUsageDesc = descriptor.Get<DawnEncoderInternalUsageDescriptor>();
     if (internalUsageDesc != nullptr && internalUsageDesc->useInternalUsages) {
         mUsageValidationMode = UsageValidationMode::Internal;
     } else {
@@ -1063,7 +1061,7 @@ RenderPassEncoder* CommandEncoder::APIBeginRenderPass(const RenderPassDescriptor
     return BeginRenderPass(descriptor).Detach();
 }
 
-Ref<RenderPassEncoder> CommandEncoder::BeginRenderPass(const RenderPassDescriptor* descriptor) {
+Ref<RenderPassEncoder> CommandEncoder::BeginRenderPass(const RenderPassDescriptor* rawDescriptor) {
     DeviceBase* device = GetDevice();
     DAWN_ASSERT(device->IsLockedByCurrentThreadIfNeeded());
 
@@ -1076,11 +1074,19 @@ Ref<RenderPassEncoder> CommandEncoder::BeginRenderPass(const RenderPassDescripto
 
     std::function<void()> passEndCallback = nullptr;
 
+    // Lazy make error function to be called if we error and need to return an error encoder.
+    auto MakeError = [&]() {
+        return RenderPassEncoder::MakeError(device, this, &mEncodingContext,
+                                            rawDescriptor ? rawDescriptor->label : nullptr);
+    };
+
+    UnpackedPtr<RenderPassDescriptor> descriptor;
     bool success = mEncodingContext.TryEncode(
         this,
         [&](CommandAllocator* allocator) -> MaybeError {
-            DAWN_TRY(ValidateRenderPassDescriptor(device, descriptor, mUsageValidationMode,
-                                                  &validationState));
+            DAWN_TRY_ASSIGN(descriptor,
+                            ValidateRenderPassDescriptor(device, rawDescriptor,
+                                                         mUsageValidationMode, &validationState));
 
             DAWN_ASSERT(validationState.IsValidState());
 
@@ -1092,43 +1098,49 @@ Ref<RenderPassEncoder> CommandEncoder::BeginRenderPass(const RenderPassDescripto
             cmd->attachmentState = device->GetOrCreateAttachmentState(descriptor);
             attachmentState = cmd->attachmentState;
 
-            for (ColorAttachmentIndex index :
-                 IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
-                uint8_t i = static_cast<uint8_t>(index);
+            auto descColorAttachments = ityp::SpanFromUntyped<ColorAttachmentIndex>(
+                descriptor->colorAttachments, descriptor->colorAttachmentCount);
+            for (auto i : IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
+                auto& descColorAttachment = descColorAttachments[i];
+                auto& cmdColorAttachment = cmd->colorAttachments[i];
+
                 TextureViewBase* colorTarget;
                 TextureViewBase* resolveTarget;
 
                 if (validationState.GetImplicitSampleCount() <= 1) {
-                    colorTarget = descriptor->colorAttachments[i].view;
-                    resolveTarget = descriptor->colorAttachments[i].resolveTarget;
+                    colorTarget = descColorAttachment.view;
+                    resolveTarget = descColorAttachment.resolveTarget;
 
-                    cmd->colorAttachments[index].view = colorTarget;
-                    cmd->colorAttachments[index].depthSlice =
-                        descriptor->colorAttachments[i].depthSlice;
-                    cmd->colorAttachments[index].loadOp = descriptor->colorAttachments[i].loadOp;
-                    cmd->colorAttachments[index].storeOp = descriptor->colorAttachments[i].storeOp;
+                    cmdColorAttachment.view = colorTarget;
+                    // Explicitly set depthSlice to 0 if it's undefined. The
+                    // wgpu::kDepthSliceUndefined is defined to differentiate between `undefined`
+                    // and 0 for depthSlice, but we use it as 0 for 2d attachments in backends.
+                    cmdColorAttachment.depthSlice =
+                        descColorAttachment.depthSlice == wgpu::kDepthSliceUndefined
+                            ? 0
+                            : descColorAttachment.depthSlice;
+                    cmdColorAttachment.loadOp = descColorAttachment.loadOp;
+                    cmdColorAttachment.storeOp = descColorAttachment.storeOp;
                 } else {
                     // We use an implicit MSAA texture and resolve to the client supplied
                     // attachment.
-                    resolveTarget = descriptor->colorAttachments[i].view;
+                    resolveTarget = descColorAttachment.view;
                     Ref<TextureViewBase> implicitMSAATargetRef;
                     DAWN_TRY_ASSIGN(implicitMSAATargetRef,
                                     device->CreateImplicitMSAARenderTextureViewFor(
                                         resolveTarget, validationState.GetImplicitSampleCount()));
                     colorTarget = implicitMSAATargetRef.Get();
 
-                    cmd->colorAttachments[index].view = std::move(implicitMSAATargetRef);
+                    cmdColorAttachment.view = std::move(implicitMSAATargetRef);
                     // Without explicitly setting depthSlice to zero, its value would be undefined.
-                    cmd->colorAttachments[index].depthSlice = 0;
-                    cmd->colorAttachments[index].loadOp = wgpu::LoadOp::Clear;
-                    cmd->colorAttachments[index].storeOp = wgpu::StoreOp::Discard;
+                    cmdColorAttachment.depthSlice = 0;
+                    cmdColorAttachment.loadOp = wgpu::LoadOp::Clear;
+                    cmdColorAttachment.storeOp = wgpu::StoreOp::Discard;
                 }
 
-                cmd->colorAttachments[index].resolveTarget = resolveTarget;
-
-                Color color = descriptor->colorAttachments[i].clearValue;
-                cmd->colorAttachments[index].clearColor =
-                    ClampClearColorValueToLegalRange(color, colorTarget->GetFormat());
+                cmdColorAttachment.resolveTarget = resolveTarget;
+                cmdColorAttachment.clearColor = ClampClearColorValueToLegalRange(
+                    descColorAttachment.clearValue, colorTarget->GetFormat());
 
                 usageTracker.TextureViewUsedAs(colorTarget, wgpu::TextureUsage::RenderAttachment);
 
@@ -1248,9 +1260,7 @@ Ref<RenderPassEncoder> CommandEncoder::BeginRenderPass(const RenderPassDescripto
                 }
             }
 
-            const RenderPassPixelLocalStorage* pls = nullptr;
-            FindInChain(descriptor->nextInChain, &pls);
-            if (pls != nullptr) {
+            if (auto* pls = descriptor.Get<RenderPassPixelLocalStorage>()) {
                 for (size_t i = 0; i < pls->storageAttachmentCount; i++) {
                     const RenderPassStorageAttachment& apiAttachment = pls->storageAttachments[i];
                     RenderPassStorageAttachmentInfo* attachmentInfo =
@@ -1283,26 +1293,22 @@ Ref<RenderPassEncoder> CommandEncoder::BeginRenderPass(const RenderPassDescripto
         mEncodingContext.EnterPass(passEncoder.Get());
 
         MaybeError error;
-
         if (validationState.GetImplicitSampleCount() > 1) {
-            error = ApplyMSAARenderToSingleSampledLoadOp(device, passEncoder.Get(), descriptor,
+            error = ApplyMSAARenderToSingleSampledLoadOp(device, passEncoder.Get(), *descriptor,
                                                          validationState.GetImplicitSampleCount());
-        } else if (ShouldApplyClearBigIntegerColorValueWithDraw(device, descriptor)) {
+        } else if (ShouldApplyClearBigIntegerColorValueWithDraw(device, *descriptor)) {
             // This is skipped if implicitSampleCount > 1. Because implicitSampleCount > 1 is only
             // supported for non-integer textures.
-            error = ApplyClearBigIntegerColorValueWithDraw(passEncoder.Get(), descriptor);
+            error = ApplyClearBigIntegerColorValueWithDraw(passEncoder.Get(), *descriptor);
         }
-
         if (device->ConsumedError(std::move(error))) {
-            return RenderPassEncoder::MakeError(device, this, &mEncodingContext,
-                                                descriptor ? descriptor->label : nullptr);
+            return MakeError();
         }
 
         return passEncoder;
     }
 
-    return RenderPassEncoder::MakeError(device, this, &mEncodingContext,
-                                        descriptor ? descriptor->label : nullptr);
+    return MakeError();
 }
 
 // This function handles render pass workarounds. Because some cases may require
@@ -1325,8 +1331,7 @@ ResultOrError<std::function<void()>> CommandEncoder::ApplyRenderPassWorkarounds(
 
         // This workaround needs to apply if there are multiple MSAA color targets (checked above)
         // and at least one resolve target.
-        for (ColorAttachmentIndex i :
-             IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
+        for (auto i : IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
             if (cmd->colorAttachments[i].resolveTarget.Get() != nullptr) {
                 splitResolvesIntoSeparatePasses = true;
                 break;
@@ -1336,8 +1341,7 @@ ResultOrError<std::function<void()>> CommandEncoder::ApplyRenderPassWorkarounds(
         if (splitResolvesIntoSeparatePasses) {
             std::vector<TemporaryResolveAttachment> temporaryResolveAttachments;
 
-            for (ColorAttachmentIndex i :
-                 IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
+            for (auto i : IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
                 auto& attachmentInfo = cmd->colorAttachments[i];
                 TextureViewBase* resolveTarget = attachmentInfo.resolveTarget.Get();
                 if (resolveTarget != nullptr) {
@@ -1392,8 +1396,7 @@ ResultOrError<std::function<void()>> CommandEncoder::ApplyRenderPassWorkarounds(
     if (device->IsToggleEnabled(Toggle::AlwaysResolveIntoZeroLevelAndLayer)) {
         std::vector<TemporaryResolveAttachment> temporaryResolveAttachments;
 
-        for (ColorAttachmentIndex index :
-             IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
+        for (auto index : IterateBitSet(cmd->attachmentState->GetColorAttachmentsMask())) {
             TextureViewBase* resolveTarget = cmd->colorAttachments[index].resolveTarget.Get();
 
             if (resolveTarget != nullptr && (resolveTarget->GetBaseMipLevel() != 0 ||

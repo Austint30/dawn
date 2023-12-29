@@ -76,10 +76,6 @@ static constexpr FeatureEnumAndInfo kFeatureInfo[] = {
     {Feature::Depth32FloatStencil8,
      {"Support depth32float-stencil8 texture format",
       "https://gpuweb.github.io/gpuweb/#depth32float-stencil8", FeatureInfo::FeatureState::Stable}},
-    {Feature::ChromiumExperimentalDp4a,
-     {"Support experimental DP4a instructions in WGSL",
-      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/shader_features.md",
-      FeatureInfo::FeatureState::Experimental}},
     {Feature::IndirectFirstInstance,
      {"Support non-zero first instance values on indirect draw calls",
       "https://gpuweb.github.io/gpuweb/#indirect-first-instance",
@@ -285,11 +281,15 @@ static constexpr FeatureEnumAndInfo kFeatureInfo[] = {
       "framebuffer_fetch.md",
       FeatureInfo::FeatureState::Experimental}},
     {Feature::BufferMapExtendedUsages,
-     {"Support creating all kinds of buffers with MapRead or MapWrite usage. MapRead and MapWrite "
-      "usages are not allowed to be included together.",
+     {"Support creating all kinds of buffers with MapRead and/or MapWrite usage.",
       "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
       "buffer_map_extended_usages.md",
       FeatureInfo::FeatureState::Experimental}},
+    {Feature::AdapterPropertiesMemoryHeaps,
+     {"Support querying memory heap info from the adapter.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "adapter_properties.md",
+      FeatureInfo::FeatureState::Stable}},
 };
 
 }  // anonymous namespace

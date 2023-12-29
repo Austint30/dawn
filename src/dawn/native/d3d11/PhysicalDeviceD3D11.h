@@ -62,7 +62,7 @@ class PhysicalDevice : public d3d::PhysicalDevice {
     void SetupBackendDeviceToggles(TogglesState* deviceToggles) const override;
 
     ResultOrError<Ref<DeviceBase>> CreateDeviceImpl(AdapterBase* adapter,
-                                                    const DeviceDescriptor* descriptor,
+                                                    const UnpackedPtr<DeviceDescriptor>& descriptor,
                                                     const TogglesState& deviceToggles) override;
 
     MaybeError ResetInternalDeviceForTestingImpl() override;
@@ -74,6 +74,8 @@ class PhysicalDevice : public d3d::PhysicalDevice {
     FeatureValidationResult ValidateFeatureSupportedWithTogglesImpl(
         wgpu::FeatureName feature,
         const TogglesState& toggles) const override;
+
+    void PopulateMemoryHeapInfo(AdapterPropertiesMemoryHeaps* memoryHeapProperties) const override;
 
     const bool mIsSharedD3D11Device;
     ComPtr<ID3D11Device> mD3D11Device;

@@ -247,6 +247,7 @@ target_sources(dawn_native
 )
 target_link_libraries(dawn_native
     PUBLIC dawncpp_headers
+           partition_alloc
     PRIVATE dawn_common
             dawn_platform
             dawn_internal_config
@@ -263,6 +264,13 @@ if (DAWN_USE_X11)
     target_sources(dawn_native PRIVATE
         "X11Functions.cpp"
         "X11Functions.h"
+    )
+endif()
+
+if (ANDROID)
+    target_sources(dawn_native PRIVATE
+        "AHBFunctions.cpp"
+        "AHBFunctions.h"
     )
 endif()
 
@@ -307,6 +315,8 @@ if (DAWN_ENABLE_D3D11 OR DAWN_ENABLE_D3D12)
         "d3d/PhysicalDeviceD3D.h"
         "d3d/PlatformFunctions.cpp"
         "d3d/PlatformFunctions.h"
+        "d3d/QueueD3D.cpp"
+        "d3d/QueueD3D.h"
         "d3d/ShaderUtils.cpp"
         "d3d/ShaderUtils.h"
         "d3d/SharedFenceD3D.cpp"
@@ -465,6 +475,11 @@ if (DAWN_ENABLE_D3D12)
         "d3d12/d3d12_platform.h"
     )
     target_link_libraries(dawn_native PRIVATE dxguid.lib)
+    if (DAWN_USE_BUILT_DXC)
+        target_compile_definitions(dawn_native PRIVATE "DAWN_USE_BUILT_DXC")
+        target_link_libraries(dawn_native PRIVATE dxcompiler)
+        add_dependencies(dawn_native copy_dxil_dll)
+    endif()
 endif()
 
 if (DAWN_ENABLE_METAL)
@@ -651,6 +666,7 @@ if (DAWN_ENABLE_VULKAN)
         "vulkan/PipelineCacheVk.h"
         "vulkan/PipelineLayoutVk.cpp"
         "vulkan/PipelineLayoutVk.h"
+        "vulkan/RefCountedVkHandle.h"
         "vulkan/QuerySetVk.cpp"
         "vulkan/QuerySetVk.h"
         "vulkan/QueueVk.cpp"
@@ -667,6 +683,10 @@ if (DAWN_ENABLE_VULKAN)
         "vulkan/SamplerVk.h"
         "vulkan/ShaderModuleVk.cpp"
         "vulkan/ShaderModuleVk.h"
+        "vulkan/SharedFenceVk.cpp"
+        "vulkan/SharedFenceVk.h"
+        "vulkan/SharedTextureMemoryVk.cpp"
+        "vulkan/SharedTextureMemoryVk.h"
         "vulkan/StreamImplVk.cpp"
         "vulkan/SwapChainVk.cpp"
         "vulkan/SwapChainVk.h"

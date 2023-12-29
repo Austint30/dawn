@@ -55,7 +55,7 @@ TEST_F(IR_VarTest, Results) {
     auto* var = b.Var(ty.ptr<function, f32>());
     EXPECT_EQ(var->Results().Length(), 1u);
     EXPECT_TRUE(var->Result(0)->Is<InstructionResult>());
-    EXPECT_EQ(var->Result(0)->Source(), var);
+    EXPECT_EQ(var->Result(0)->Instruction(), var);
 }
 
 TEST_F(IR_VarTest, Initializer_Usage) {
@@ -87,7 +87,8 @@ TEST_F(IR_VarTest, Clone) {
     EXPECT_EQ(new_v->Result(0)->Type(),
               mod.Types().ptr(core::AddressSpace::kFunction, mod.Types().f32()));
 
-    auto new_val = v->Initializer()->As<Constant>()->Value();
+    ASSERT_NE(nullptr, new_v->Initializer());
+    auto new_val = new_v->Initializer()->As<Constant>()->Value();
     ASSERT_TRUE(new_val->Is<core::constant::Scalar<f32>>());
     EXPECT_FLOAT_EQ(4_f, new_val->As<core::constant::Scalar<f32>>()->ValueAs<f32>());
 

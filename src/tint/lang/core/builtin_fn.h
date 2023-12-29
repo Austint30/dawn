@@ -107,6 +107,8 @@ enum class BuiltinFn : uint8_t {
     kPack2X16Unorm,
     kPack4X8Snorm,
     kPack4X8Unorm,
+    kPack4XI8,
+    kPack4XU8,
     kPow,
     kQuantizeToF16,
     kRadians,
@@ -245,6 +247,8 @@ constexpr BuiltinFn kBuiltinFns[] = {
     BuiltinFn::kPack2X16Unorm,
     BuiltinFn::kPack4X8Snorm,
     BuiltinFn::kPack4X8Unorm,
+    BuiltinFn::kPack4XI8,
+    BuiltinFn::kPack4XU8,
     BuiltinFn::kPow,
     BuiltinFn::kQuantizeToF16,
     BuiltinFn::kRadians,
@@ -365,6 +369,8 @@ constexpr const char* kBuiltinFnStrings[] = {
     "pack2x16unorm",
     "pack4x8snorm",
     "pack4x8unorm",
+    "pack4xI8",
+    "pack4xU8",
     "pow",
     "quantizeToF16",
     "radians",
@@ -468,10 +474,12 @@ bool IsBarrier(BuiltinFn f);
 /// @returns true if the given `f` is an atomic builtin
 bool IsAtomic(BuiltinFn f);
 
-/// Determines if the given `f` is a DP4a builtin.
+/// Determines if the given `f` is a builtin defined in the language extension
+/// `packed_4x8_integer_dot_product`.
 /// @param f the builtin type
-/// @returns true if the given `f` is a DP4a builtin
-bool IsDP4a(BuiltinFn f);
+/// @returns true if the given `f` is a builtin defined in the language extension
+/// `packed_4x8_integer_dot_product`.
+bool IsPacked4x8IntegerDotProductBuiltin(BuiltinFn f);
 
 /// Determines if the given `f` is a subgroup builtin.
 /// @param f the builtin type

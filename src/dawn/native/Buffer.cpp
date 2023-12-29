@@ -214,13 +214,15 @@ struct BufferBase::MapAsyncEvent final : public EventManager::TrackedEvent {
     }
 };
 
-MaybeError ValidateBufferDescriptor(DeviceBase* device, const BufferDescriptor* descriptor) {
-    UnpackedBufferDescriptorChain unpacked;
-    DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpackChain(descriptor));
+ResultOrError<UnpackedPtr<BufferDescriptor>> ValidateBufferDescriptor(
+    DeviceBase* device,
+    const BufferDescriptor* descriptor) {
+    UnpackedPtr<BufferDescriptor> unpacked;
+    DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpack(descriptor));
 
     DAWN_TRY(ValidateBufferUsage(descriptor->usage));
 
-    if (const auto* hostMappedDesc = std::get<const BufferHostMappedPointer*>(unpacked)) {
+    if (const auto* hostMappedDesc = unpacked.Get<BufferHostMappedPointer>()) {
         // TODO(crbug.com/dawn/2018): Properly expose this limit.
         uint32_t requiredAlignment = 4096;
         if (device->GetAdapter()->GetPhysicalDevice()->GetBackendType() ==
@@ -247,17 +249,7 @@ MaybeError ValidateBufferDescriptor(DeviceBase* device, const BufferDescriptor* 
 
     DAWN_INVALID_IF(usage == wgpu::BufferUsage::None, "Buffer usages must not be 0.");
 
-    if (device->HasFeature(Feature::BufferMapExtendedUsages)) {
-        // Note with BufferMapExtendedUsages, we only restrict that MapRead & MapWrite cannot be
-        // combined together. This makes it easier to optimize the storage in the backends. For
-        // example, D3D11 has specialized resource usage for GPU write-only or CPU write-only
-        // buffers.
-        DAWN_INVALID_IF(
-            !HasZeroOrOneBits(static_cast<wgpu::BufferUsage>(usage & kMappableBufferUsages)),
-            "Buffer usages (%s) is invalid. A buffer usage can contain either %s or %s "
-            "but not both.",
-            usage, wgpu::BufferUsage::MapRead, wgpu::BufferUsage::MapWrite);
-    } else {
+    if (!device->HasFeature(Feature::BufferMapExtendedUsages)) {
         const wgpu::BufferUsage kMapWriteAllowedUsages =
             wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
         DAWN_INVALID_IF(
@@ -283,12 +275,12 @@ MaybeError ValidateBufferDescriptor(DeviceBase* device, const BufferDescriptor* 
                     "Buffer size (%u) exceeds the max buffer size limit (%u).", descriptor->size,
                     device->GetLimits().v1.maxBufferSize);
 
-    return {};
+    return unpacked;
 }
 
 // Buffer
 
-BufferBase::BufferBase(DeviceBase* device, const BufferDescriptor* descriptor)
+BufferBase::BufferBase(DeviceBase* device, const UnpackedPtr<BufferDescriptor>& descriptor)
     : ApiObjectBase(device, descriptor->label),
       mSize(descriptor->size),
       mUsage(descriptor->usage),
@@ -328,8 +320,7 @@ BufferBase::BufferBase(DeviceBase* device, const BufferDescriptor* descriptor)
         }
     }
 
-    const BufferHostMappedPointer* hostMappedDesc = nullptr;
-    FindInChain(descriptor->nextInChain, &hostMappedDesc);
+    auto* hostMappedDesc = descriptor.Get<BufferHostMappedPointer>();
     if (hostMappedDesc != nullptr) {
         mState = BufferState::HostMappedPersistent;
     }

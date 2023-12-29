@@ -119,6 +119,13 @@ struct State {
                             }
                         }
                         break;
+                    case core::BuiltinFn::kPack4XI8:
+                    case core::BuiltinFn::kPack4XU8: {
+                        if (config.pack_unpack_4x8) {
+                            worklist.Push(builtin);
+                        }
+                        break;
+                    }
                     default:
                         break;
                 }
@@ -155,6 +162,12 @@ struct State {
                     break;
                 case core::BuiltinFn::kTextureSampleBaseClampToEdge:
                     replacement = TextureSampleBaseClampToEdge_2d_f32(builtin);
+                    break;
+                case core::BuiltinFn::kPack4XI8:
+                    replacement = Pack4xI8(builtin);
+                    break;
+                case core::BuiltinFn::kPack4XU8:
+                    replacement = Pack4xU8(builtin);
                     break;
                 default:
                     break;
@@ -567,6 +580,56 @@ struct State {
                 b.Call(vec2f, core::BuiltinFn::kClamp, coords, half_texel, one_minus_half_texel);
             result = b.Call(ty.vec4<f32>(), core::BuiltinFn::kTextureSampleLevel, texture, sampler,
                             clamped, 0_f)
+                         ->Result(0);
+        });
+        return result;
+    }
+
+    /// Polyfill a `Pack4xI8()` builtin call
+    /// @param call the builtin call instruction
+    /// @returns the replacement value
+    ir::Value* Pack4xI8(ir::CoreBuiltinCall* call) {
+        // Replace `pack4xI8(%x)` with:
+        //   %n      = vec4u(0, 8, 16, 24);
+        //   %x_i8   = vec4u((%x & vec4i(0xff)) << n);
+        //   %result = dot(%x_i8, vec4u(1));
+        ir::Value* result = nullptr;
+        auto* x = call->Args()[0];
+        b.InsertBefore(call, [&] {
+            auto* vec4u = ty.vec4<u32>();
+            auto* vec4i = ty.vec4<i32>();
+
+            auto* n = b.Construct(vec4u, b.Constant(u32(0)), b.Constant(u32(8)),
+                                  b.Constant(u32(16)), b.Constant(u32(24)));
+            auto* x_i8 = b.Convert(
+                vec4u,
+                b.ShiftLeft(vec4i, b.And(vec4i, x, b.Construct(vec4i, b.Constant(i32(0xff)))), n));
+            result = b.Call(ty.u32(), core::BuiltinFn::kDot, x_i8,
+                            b.Construct(vec4u, (b.Constant(u32(1)))))
+                         ->Result(0);
+        });
+        return result;
+    }
+
+    /// Polyfill a `Pack4xU8()` builtin call
+    /// @param call the builtin call instruction
+    /// @returns the replacement value
+    ir::Value* Pack4xU8(ir::CoreBuiltinCall* call) {
+        // Replace `pack4xU8(%x)` with:
+        //   %n      = vec4u(0, 8, 16, 24);
+        //   %x_i8   = (%x & vec4u(0xff)) << %n;
+        //   %result = dot(%x_i8, vec4u(1));
+        ir::Value* result = nullptr;
+        auto* x = call->Args()[0];
+        b.InsertBefore(call, [&] {
+            auto* vec4u = ty.vec4<u32>();
+
+            auto* n = b.Construct(vec4u, b.Constant(u32(0)), b.Constant(u32(8)),
+                                  b.Constant(u32(16)), b.Constant(u32(24)));
+            auto* x_u8 =
+                b.ShiftLeft(vec4u, b.And(vec4u, x, b.Construct(vec4u, b.Constant(u32(0xff)))), n);
+            result = b.Call(ty.u32(), core::BuiltinFn::kDot, x_u8,
+                            b.Construct(vec4u, (b.Constant(u32(1)))))
                          ->Result(0);
         });
         return result;

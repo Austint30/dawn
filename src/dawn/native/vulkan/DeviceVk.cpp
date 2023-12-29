@@ -35,6 +35,7 @@
 #include "dawn/native/Error.h"
 #include "dawn/native/ErrorData.h"
 #include "dawn/native/Instance.h"
+#include "dawn/native/SystemHandle.h"
 #include "dawn/native/VulkanBackend.h"
 #include "dawn/native/vulkan/BackendVk.h"
 #include "dawn/native/vulkan/BindGroupLayoutVk.h"
@@ -53,6 +54,8 @@
 #include "dawn/native/vulkan/ResourceMemoryAllocatorVk.h"
 #include "dawn/native/vulkan/SamplerVk.h"
 #include "dawn/native/vulkan/ShaderModuleVk.h"
+#include "dawn/native/vulkan/SharedFenceVk.h"
+#include "dawn/native/vulkan/SharedTextureMemoryVk.h"
 #include "dawn/native/vulkan/SwapChainVk.h"
 #include "dawn/native/vulkan/TextureVk.h"
 #include "dawn/native/vulkan/UtilsVulkan.h"
@@ -62,7 +65,7 @@ namespace dawn::native::vulkan {
 
 // static
 ResultOrError<Ref<Device>> Device::Create(AdapterBase* adapter,
-                                          const DeviceDescriptor* descriptor,
+                                          const UnpackedPtr<DeviceDescriptor>& descriptor,
                                           const TogglesState& deviceToggles) {
     Ref<Device> device = AcquireRef(new Device(adapter, descriptor, deviceToggles));
     DAWN_TRY(device->Initialize(descriptor));
@@ -70,11 +73,11 @@ ResultOrError<Ref<Device>> Device::Create(AdapterBase* adapter,
 }
 
 Device::Device(AdapterBase* adapter,
-               const DeviceDescriptor* descriptor,
+               const UnpackedPtr<DeviceDescriptor>& descriptor,
                const TogglesState& deviceToggles)
     : DeviceBase(adapter, descriptor, deviceToggles), mDebugPrefix(GetNextDeviceDebugPrefix()) {}
 
-MaybeError Device::Initialize(const DeviceDescriptor* descriptor) {
+MaybeError Device::Initialize(const UnpackedPtr<DeviceDescriptor>& descriptor) {
     // Copy the adapter's device info to the device so that we can change the "knobs"
     mDeviceInfo = ToBackend(GetPhysicalDevice())->GetDeviceInfo();
 
@@ -102,7 +105,37 @@ MaybeError Device::Initialize(const DeviceDescriptor* descriptor) {
     mResourceMemoryAllocator = std::make_unique<MutexProtected<ResourceMemoryAllocator>>(this);
 
     mExternalMemoryService = std::make_unique<external_memory::Service>(this);
-    mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(this);
+
+    if (uint32_t(HasFeature(Feature::SharedFenceVkSemaphoreOpaqueFD)) +
+            uint32_t(HasFeature(Feature::SharedFenceVkSemaphoreSyncFD)) +
+            uint32_t(HasFeature(Feature::SharedFenceVkSemaphoreZirconHandle)) >
+        1) {
+        return DAWN_VALIDATION_ERROR("At most one of %s, %s, and %s may be enabled.",
+                                     wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD,
+                                     wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD,
+                                     wgpu::FeatureName::SharedFenceVkSemaphoreZirconHandle);
+    }
+    if (HasFeature(Feature::SharedFenceVkSemaphoreOpaqueFD)) {
+        mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(
+            this, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
+    } else if (HasFeature(Feature::SharedFenceVkSemaphoreSyncFD)) {
+        mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(
+            this, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT);
+    } else if (HasFeature(Feature::SharedFenceVkSemaphoreZirconHandle)) {
+        mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(
+            this, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_ZIRCON_EVENT_BIT_FUCHSIA);
+    } else {
+#if DAWN_PLATFORM_IS(FUCHSIA)
+        mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(
+            this, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_ZIRCON_EVENT_BIT_FUCHSIA);
+#elif DAWN_PLATFORM_IS(ANDROID) || DAWN_PLATFORM_IS(CHROMEOS)
+        mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(
+            this, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT);
+#else
+        mExternalSemaphoreService = std::make_unique<external_semaphore::Service>(
+            this, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
+#endif
+    }
 
     SetLabelImpl();
 
@@ -126,7 +159,8 @@ ResultOrError<Ref<BindGroupLayoutInternalBase>> Device::CreateBindGroupLayoutImp
     const BindGroupLayoutDescriptor* descriptor) {
     return BindGroupLayout::Create(this, descriptor);
 }
-ResultOrError<Ref<BufferBase>> Device::CreateBufferImpl(const BufferDescriptor* descriptor) {
+ResultOrError<Ref<BufferBase>> Device::CreateBufferImpl(
+    const UnpackedPtr<BufferDescriptor>& descriptor) {
     return Buffer::Create(this, descriptor);
 }
 ResultOrError<Ref<CommandBufferBase>> Device::CreateCommandBuffer(
@@ -135,25 +169,25 @@ ResultOrError<Ref<CommandBufferBase>> Device::CreateCommandBuffer(
     return CommandBuffer::Create(encoder, descriptor);
 }
 Ref<ComputePipelineBase> Device::CreateUninitializedComputePipelineImpl(
-    const ComputePipelineDescriptor* descriptor) {
+    const UnpackedPtr<ComputePipelineDescriptor>& descriptor) {
     return ComputePipeline::CreateUninitialized(this, descriptor);
 }
 ResultOrError<Ref<PipelineLayoutBase>> Device::CreatePipelineLayoutImpl(
-    const PipelineLayoutDescriptor* descriptor) {
+    const UnpackedPtr<PipelineLayoutDescriptor>& descriptor) {
     return PipelineLayout::Create(this, descriptor);
 }
 ResultOrError<Ref<QuerySetBase>> Device::CreateQuerySetImpl(const QuerySetDescriptor* descriptor) {
     return QuerySet::Create(this, descriptor);
 }
 Ref<RenderPipelineBase> Device::CreateUninitializedRenderPipelineImpl(
-    const RenderPipelineDescriptor* descriptor) {
+    const UnpackedPtr<RenderPipelineDescriptor>& descriptor) {
     return RenderPipeline::CreateUninitialized(this, descriptor);
 }
 ResultOrError<Ref<SamplerBase>> Device::CreateSamplerImpl(const SamplerDescriptor* descriptor) {
     return Sampler::Create(this, descriptor);
 }
 ResultOrError<Ref<ShaderModuleBase>> Device::CreateShaderModuleImpl(
-    const ShaderModuleDescriptor* descriptor,
+    const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
     ShaderModuleParseResult* parseResult,
     OwnedCompilationMessages* compilationMessages) {
     return ShaderModule::Create(this, descriptor, parseResult, compilationMessages);
@@ -164,7 +198,8 @@ ResultOrError<Ref<SwapChainBase>> Device::CreateSwapChainImpl(
     const SwapChainDescriptor* descriptor) {
     return SwapChain::Create(this, surface, previousSwapChain, descriptor);
 }
-ResultOrError<Ref<TextureBase>> Device::CreateTextureImpl(const TextureDescriptor* descriptor) {
+ResultOrError<Ref<TextureBase>> Device::CreateTextureImpl(
+    const UnpackedPtr<TextureDescriptor>& descriptor) {
     return Texture::Create(this, descriptor);
 }
 ResultOrError<Ref<TextureViewBase>> Device::CreateTextureViewImpl(
@@ -189,6 +224,75 @@ void Device::InitializeRenderPipelineAsyncImpl(Ref<RenderPipelineBase> renderPip
 ResultOrError<wgpu::TextureUsage> Device::GetSupportedSurfaceUsageImpl(
     const Surface* surface) const {
     return SwapChain::GetSupportedSurfaceUsage(this, surface);
+}
+
+ResultOrError<Ref<SharedTextureMemoryBase>> Device::ImportSharedTextureMemoryImpl(
+    const SharedTextureMemoryDescriptor* descriptor) {
+    UnpackedPtr<SharedTextureMemoryDescriptor> unpacked;
+    DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpack(descriptor));
+
+    wgpu::SType type;
+    DAWN_TRY_ASSIGN(type,
+                    (unpacked.ValidateBranches<Branch<SharedTextureMemoryDmaBufDescriptor>,
+                                               Branch<SharedTextureMemoryAHardwareBufferDescriptor>,
+                                               Branch<SharedTextureMemoryOpaqueFDDescriptor>>()));
+
+    switch (type) {
+        case wgpu::SType::SharedTextureMemoryDmaBufDescriptor:
+            DAWN_INVALID_IF(!HasFeature(Feature::SharedTextureMemoryDmaBuf), "%s is not enabled.",
+                            wgpu::FeatureName::SharedTextureMemoryDmaBuf);
+            return SharedTextureMemory::Create(this, descriptor->label,
+                                               unpacked.Get<SharedTextureMemoryDmaBufDescriptor>());
+        case wgpu::SType::SharedTextureMemoryAHardwareBufferDescriptor:
+            DAWN_INVALID_IF(!HasFeature(Feature::SharedTextureMemoryAHardwareBuffer),
+                            "%s is not enabled.",
+                            wgpu::FeatureName::SharedTextureMemoryAHardwareBuffer);
+            return SharedTextureMemory::Create(
+                this, descriptor->label,
+                unpacked.Get<SharedTextureMemoryAHardwareBufferDescriptor>());
+        case wgpu::SType::SharedTextureMemoryOpaqueFDDescriptor:
+            DAWN_INVALID_IF(!HasFeature(Feature::SharedTextureMemoryOpaqueFD), "%s is not enabled.",
+                            wgpu::FeatureName::SharedTextureMemoryOpaqueFD);
+            return SharedTextureMemory::Create(
+                this, descriptor->label, unpacked.Get<SharedTextureMemoryOpaqueFDDescriptor>());
+        default:
+            DAWN_UNREACHABLE();
+    }
+}
+
+ResultOrError<Ref<SharedFenceBase>> Device::ImportSharedFenceImpl(
+    const SharedFenceDescriptor* descriptor) {
+    UnpackedPtr<SharedFenceDescriptor> unpacked;
+    DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpack(descriptor));
+
+    wgpu::SType type;
+    DAWN_TRY_ASSIGN(
+        type, (unpacked.ValidateBranches<Branch<SharedFenceVkSemaphoreZirconHandleDescriptor>,
+                                         Branch<SharedFenceVkSemaphoreSyncFDDescriptor>,
+                                         Branch<SharedFenceVkSemaphoreOpaqueFDDescriptor>>()));
+
+    switch (type) {
+        case wgpu::SType::SharedFenceVkSemaphoreZirconHandleDescriptor:
+            DAWN_INVALID_IF(!HasFeature(Feature::SharedFenceVkSemaphoreZirconHandle),
+                            "%s is not enabled.",
+                            wgpu::FeatureName::SharedFenceVkSemaphoreZirconHandle);
+            return SharedFence::Create(
+                this, descriptor->label,
+                unpacked.Get<SharedFenceVkSemaphoreZirconHandleDescriptor>());
+        case wgpu::SType::SharedFenceVkSemaphoreSyncFDDescriptor:
+            DAWN_INVALID_IF(!HasFeature(Feature::SharedFenceVkSemaphoreSyncFD),
+                            "%s is not enabled.", wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD);
+            return SharedFence::Create(this, descriptor->label,
+                                       unpacked.Get<SharedFenceVkSemaphoreSyncFDDescriptor>());
+        case wgpu::SType::SharedFenceVkSemaphoreOpaqueFDDescriptor:
+            DAWN_INVALID_IF(!HasFeature(Feature::SharedFenceVkSemaphoreOpaqueFD),
+                            "%s is not enabled.",
+                            wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD);
+            return SharedFence::Create(this, descriptor->label,
+                                       unpacked.Get<SharedFenceVkSemaphoreOpaqueFDDescriptor>());
+        default:
+            DAWN_UNREACHABLE();
+    }
 }
 
 MaybeError Device::TickImpl() {
@@ -539,13 +643,11 @@ MaybeError Device::ImportExternalImage(const ExternalImageDescriptorVk* descript
                                        const std::vector<ExternalSemaphoreHandle>& waitHandles,
                                        VkDeviceMemory* outAllocation,
                                        std::vector<VkSemaphore>* outWaitSemaphores) {
-    const TextureDescriptor* textureDescriptor = FromAPI(descriptor->cTextureDescriptor);
-
-    const DawnTextureInternalUsageDescriptor* internalUsageDesc = nullptr;
-    FindInChain(textureDescriptor->nextInChain, &internalUsageDesc);
+    UnpackedPtr<TextureDescriptor> textureDescriptor;
+    DAWN_TRY_ASSIGN(textureDescriptor, ValidateAndUnpack(FromAPI(descriptor->cTextureDescriptor)));
 
     wgpu::TextureUsage usage = textureDescriptor->usage;
-    if (internalUsageDesc != nullptr) {
+    if (auto* internalUsageDesc = textureDescriptor.Get<DawnTextureInternalUsageDescriptor>()) {
         usage |= internalUsageDesc->internalUsage;
     }
 
@@ -570,6 +672,13 @@ MaybeError Device::ImportExternalImage(const ExternalImageDescriptorVk* descript
     for (const ExternalSemaphoreHandle& handle : waitHandles) {
         VkSemaphore semaphore = VK_NULL_HANDLE;
         DAWN_TRY_ASSIGN(semaphore, mExternalSemaphoreService->ImportSemaphore(handle));
+
+        // The legacy import mechanism transfers ownership to Dawn.
+        // The new import mechanism dups the semaphore handle.
+        // Therefore, on success, because ImportSemaphore has dup'ed the handle,
+        // we need to close the old handle by acquiring and dropping it.
+        // TODO(dawn:1745): This entire code path will be deprecated and removed.
+        SystemHandle::Acquire(handle);
         outWaitSemaphores->push_back(semaphore);
     }
 
@@ -604,10 +713,13 @@ TextureBase* Device::CreateTextureWrappingVulkanImage(
     const ExternalImageDescriptorVk* descriptor,
     ExternalMemoryHandle memoryHandle,
     const std::vector<ExternalSemaphoreHandle>& waitHandles) {
-    const TextureDescriptor* textureDescriptor = FromAPI(descriptor->cTextureDescriptor);
-
     // Initial validation
     if (ConsumedError(ValidateIsAlive())) {
+        return nullptr;
+    }
+    UnpackedPtr<TextureDescriptor> textureDescriptor;
+    if (ConsumedError(ValidateAndUnpack(FromAPI(descriptor->cTextureDescriptor)),
+                      &textureDescriptor)) {
         return nullptr;
     }
     if (ConsumedError(ValidateTextureDescriptor(this, textureDescriptor,
@@ -738,10 +850,6 @@ void Device::DestroyImpl() {
     // deinitialization.
 
     ToBackend(GetPhysicalDevice())->GetVulkanInstance()->StopListeningForDeviceMessages(this);
-
-    if (GetQueue() != nullptr) {
-        GetQueue()->Destroy();
-    }
 
     for (Ref<DescriptorSetAllocator>& allocator :
          mDescriptorAllocatorsPendingDeallocation.IterateUpTo(kMaxExecutionSerial)) {

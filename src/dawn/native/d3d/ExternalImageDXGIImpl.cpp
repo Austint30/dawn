@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "dawn/common/Log.h"
+#include "dawn/native/ChainUtils.h"
 #include "dawn/native/D3D12Backend.h"
 #include "dawn/native/DawnNative.h"
 #include "dawn/native/d3d/DeviceD3D.h"
@@ -40,7 +41,7 @@
 
 namespace dawn::native::d3d {
 
-MaybeError ValidateTextureDescriptorCanBeWrapped(const TextureDescriptor* descriptor) {
+MaybeError ValidateTextureDescriptorCanBeWrapped(const UnpackedPtr<TextureDescriptor>& descriptor) {
     DAWN_INVALID_IF(descriptor->dimension != wgpu::TextureDimension::e2D,
                     "Texture dimension (%s) is not %s.", descriptor->dimension,
                     wgpu::TextureDimension::e2D);
@@ -57,9 +58,10 @@ MaybeError ValidateTextureDescriptorCanBeWrapped(const TextureDescriptor* descri
     return {};
 }
 
-ExternalImageDXGIImpl::ExternalImageDXGIImpl(Device* backendDevice,
-                                             ComPtr<IUnknown> d3dResource,
-                                             const TextureDescriptor* textureDescriptor)
+ExternalImageDXGIImpl::ExternalImageDXGIImpl(
+    Device* backendDevice,
+    ComPtr<IUnknown> d3dResource,
+    const UnpackedPtr<TextureDescriptor>& textureDescriptor)
     : mBackendDevice(backendDevice),
       mD3DResource(std::move(d3dResource)),
       mUsage(textureDescriptor->usage),
@@ -166,8 +168,9 @@ WGPUTexture ExternalImageDXGIImpl::BeginAccess(
 
     Ref<TextureBase> texture =
         ToBackend(mBackendDevice.Get())
-            ->CreateD3DExternalTexture(&textureDescriptor, mD3DResource, std::move(waitFences),
-                                       descriptor->isSwapChainTexture, descriptor->isInitialized);
+            ->CreateD3DExternalTexture(Unpack(&textureDescriptor), mD3DResource,
+                                       std::move(waitFences), descriptor->isSwapChainTexture,
+                                       descriptor->isInitialized);
 
     if (mDXGIKeyedMutex && mAccessCount == 0) {
         HRESULT hr = mDXGIKeyedMutex->AcquireSync(kDXGIKeyedMutexAcquireKey, INFINITE);
@@ -199,7 +202,7 @@ void ExternalImageDXGIImpl::EndAccess(WGPUTexture texture,
 
     ExecutionSerial fenceValue;
     if (mBackendDevice->ConsumedError(backendTexture->EndAccess(), &fenceValue)) {
-        dawn::ErrorLog() << "D3D11 fence end access failed";
+        dawn::ErrorLog() << "D3D fence end access failed";
         return;
     }
     signalFence->fenceHandle = ToBackend(mBackendDevice.Get())->GetFenceHandle();

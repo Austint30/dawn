@@ -33,6 +33,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "src/tint/lang/wgsl/sem/variable.h"
 
 #if TINT_BUILD_SPV_READER || TINT_BUILD_SPV_WRITER
 #include "spirv-tools/libspirv.hpp"
@@ -66,7 +67,7 @@
 #endif  // TINT_BUILD_WGSL_READER
 
 #if TINT_BUILD_SPV_WRITER
-#include "src/tint/lang/spirv/writer/helpers/generate_bindings.h"
+#include "src/tint/lang/spirv/writer/helpers/ast_generate_bindings.h"
 #include "src/tint/lang/spirv/writer/writer.h"
 #endif  // TINT_BUILD_SPV_WRITER
 
@@ -178,6 +179,7 @@ struct Options {
 
     bool dump_ir = false;
     bool use_ir = false;
+    bool use_ir_reader = false;
 
 #if TINT_BUILD_SYNTAX_TREE_WRITER
     bool dump_ast = false;
@@ -290,6 +292,10 @@ When specified, automatically enables MSL validation)",
     auto& use_ir = options.Add<BoolOption>(
         "use-ir", "Use the IR for writers and transforms when possible", Default{false});
     TINT_DEFER(opts->use_ir = *use_ir.value);
+
+    auto& use_ir_reader = options.Add<BoolOption>(
+        "use-ir-reader", "Use the IR for the SPIR-V reader", Default{false});
+    TINT_DEFER(opts->use_ir_reader = *use_ir_reader.value);
 
     auto& verbose =
         options.Add<BoolOption>("verbose", "Verbose output", ShortName{"v"}, Default{false});
@@ -763,10 +769,19 @@ bool GenerateMsl([[maybe_unused]] const tint::Program& program,
     gen_options.pixel_local_options = options.pixel_local_options;
     gen_options.bindings = tint::msl::writer::GenerateBindings(*input_program);
     gen_options.array_length_from_uniform.ubo_binding = tint::BindingPoint{0, 30};
-    gen_options.array_length_from_uniform.bindpoint_to_size_index.emplace(tint::BindingPoint{0, 0},
-                                                                          0);
-    gen_options.array_length_from_uniform.bindpoint_to_size_index.emplace(tint::BindingPoint{0, 1},
-                                                                          1);
+
+    // Add array_length_from_uniform entries for all storage buffers with runtime sized arrays.
+    std::unordered_set<tint::BindingPoint> storage_bindings;
+    for (auto* var : program.AST().GlobalVariables()) {
+        auto* sem_var = program.Sem().Get<tint::sem::GlobalVariable>(var);
+        if (!sem_var->Type()->UnwrapRef()->HasFixedFootprint()) {
+            auto bp = sem_var->Attributes().binding_point.value();
+            if (storage_bindings.insert(bp).second) {
+                gen_options.array_length_from_uniform.bindpoint_to_size_index.emplace(
+                    bp, static_cast<uint32_t>(storage_bindings.size() - 1));
+            }
+        }
+    }
 
     tint::Result<tint::msl::writer::Output> result;
     if (options.use_ir) {
@@ -1139,6 +1154,7 @@ int main(int argc, const char** argv) {
     tint::cmd::LoadProgramOptions opts;
     opts.filename = options.input_filename;
 #if TINT_BUILD_SPV_READER
+    opts.use_ir = options.use_ir_reader;
     opts.spirv_reader_options = options.spirv_reader_options;
 #endif
 
@@ -1163,7 +1179,7 @@ int main(int argc, const char** argv) {
 
 #if TINT_BUILD_WGSL_READER
     if (options.dump_ir) {
-        auto result = tint::wgsl::reader::ProgramToIR(info.program);
+        auto result = tint::wgsl::reader::ProgramToLoweredIR(info.program);
         if (!result) {
             std::cerr << "Failed to build IR from program: " << result.Failure() << "\n";
         } else {

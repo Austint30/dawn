@@ -172,17 +172,17 @@ deps = {
   },
 
   'third_party/angle': {
-    'url': '{chromium_git}/angle/angle@fba482b7107ccf3e178f6bf56b6b0285407ace3a',
+    'url': '{chromium_git}/angle/angle@48ff6a269e732ea1fa458e5b8bb29df6578c9849',
     'condition': 'dawn_standalone',
   },
 
   'third_party/swiftshader': {
-    'url': '{swiftshader_git}/SwiftShader@50dbfc35468c1ffa037e3e90bc71327d16a5e0cc',
+    'url': '{swiftshader_git}/SwiftShader@2fa7e9b99ae4e70ea5ae2cc9c8d3afb43391384f',
     'condition': 'dawn_standalone',
   },
 
   'third_party/vulkan-deps': {
-    'url': '{chromium_git}/vulkan-deps@05e2e582257cbeb1303ed863f2f9c412202769c7',
+    'url': '{chromium_git}/vulkan-deps@3fc29f8b41b78770829657b57ad144adb46e9bf5',
     'condition': 'dawn_standalone',
   },
 
@@ -197,7 +197,7 @@ deps = {
   },
 
   'third_party/dxc': {
-    'url': '{chromium_git}/external/github.com/microsoft/DirectXShaderCompiler@b32b169bd36a4f74d9af215b3ce69d319f7658ae',
+    'url': '{chromium_git}/external/github.com/microsoft/DirectXShaderCompiler@a743e97f89f929d56b3d906b611f5fba7a12e441',
   },
 
   'third_party/dxheaders': {
@@ -216,7 +216,7 @@ deps = {
 
   # WebGPU CTS - not used directly by Dawn, only transitively by Chromium.
   'third_party/webgpu-cts': {
-    'url': '{chromium_git}/external/github.com/gpuweb/cts@300768e70537a52889f9e283465b1fbf8679ebfb',
+    'url': '{chromium_git}/external/github.com/gpuweb/cts@f20c5f7b8f53904edaa98651d764e1b8305d7c14',
     'condition': 'build_with_chromium',
   },
 
@@ -230,7 +230,7 @@ deps = {
     'condition': 'dawn_node',
   },
   'third_party/gpuweb': {
-    'url': '{github_git}/gpuweb/gpuweb.git@1000c3b256b04988f7d747bb7689d03ad9417a1d',
+    'url': '{github_git}/gpuweb/gpuweb.git@a6805d5298c6979392768ed13f442e35b9a35b22',
     'condition': 'dawn_node',
   },
 
@@ -287,7 +287,7 @@ deps = {
   # Dependencies for PartitionAlloc.
   # Doc: https://docs.google.com/document/d/1wz45t0alQthsIU9P7_rQcfQyqnrBMXzrOjSzdQo-V-A
   'third_party/partition_alloc': {
-    'url': '{chromium_git}/chromium/src/base/allocator/partition_allocator.git@6f90cb04abb81942abaab7b63d34c02882208172',
+    'url': '{chromium_git}/chromium/src/base/allocator/partition_allocator.git@cb18695870869cf972b76cdd27d52f86c1752d0e',
     'condition': 'dawn_standalone',
   },
   'third_party/glm': {

@@ -262,6 +262,100 @@ MaybeError TransitionAndClearForSyncScope(Device* device,
     return {};
 }
 
+// Reset the query sets used on render pass because the reset command must be called outside
+// render pass.
+void ResetUsedQuerySetsOnRenderPass(Device* device,
+                                    VkCommandBuffer commands,
+                                    QuerySetBase* querySet,
+                                    const std::vector<bool>& availability) {
+    DAWN_ASSERT(availability.size() == querySet->GetQueryAvailability().size());
+
+    auto currentIt = availability.begin();
+    auto lastIt = availability.end();
+    // Traverse the used queries which availability are true.
+    while (currentIt != lastIt) {
+        auto firstTrueIt = std::find(currentIt, lastIt, true);
+        // No used queries need to be reset
+        if (firstTrueIt == lastIt) {
+            break;
+        }
+
+        auto nextFalseIt = std::find(firstTrueIt, lastIt, false);
+
+        uint32_t queryIndex = std::distance(availability.begin(), firstTrueIt);
+        uint32_t queryCount = std::distance(firstTrueIt, nextFalseIt);
+
+        // Reset the queries between firstTrueIt and nextFalseIt (which is at most
+        // lastIt)
+        device->fn.CmdResetQueryPool(commands, ToBackend(querySet)->GetHandle(), queryIndex,
+                                     queryCount);
+
+        // Set current iterator to next false
+        currentIt = nextFalseIt;
+    }
+}
+
+void RecordWriteTimestampCmd(CommandRecordingContext* recordingContext,
+                             Device* device,
+                             QuerySetBase* querySet,
+                             uint32_t queryIndex,
+                             bool isRenderPass,
+                             VkPipelineStageFlagBits pipelineStage) {
+    VkCommandBuffer commands = recordingContext->commandBuffer;
+
+    // The queries must be reset between uses, and the reset command cannot be called in render
+    // pass.
+    if (!isRenderPass) {
+        device->fn.CmdResetQueryPool(commands, ToBackend(querySet)->GetHandle(), queryIndex, 1);
+    }
+
+    device->fn.CmdWriteTimestamp(commands, pipelineStage, ToBackend(querySet)->GetHandle(),
+                                 queryIndex);
+}
+
+void RecordResolveQuerySetCmd(VkCommandBuffer commands,
+                              Device* device,
+                              QuerySet* querySet,
+                              uint32_t firstQuery,
+                              uint32_t queryCount,
+                              Buffer* destination,
+                              uint64_t destinationOffset) {
+    const std::vector<bool>& availability = querySet->GetQueryAvailability();
+
+    auto currentIt = availability.begin() + firstQuery;
+    auto lastIt = availability.begin() + firstQuery + queryCount;
+
+    // Traverse available queries in the range of [firstQuery, firstQuery +  queryCount - 1]
+    while (currentIt != lastIt) {
+        auto firstTrueIt = std::find(currentIt, lastIt, true);
+        // No available query found for resolving
+        if (firstTrueIt == lastIt) {
+            break;
+        }
+        auto nextFalseIt = std::find(firstTrueIt, lastIt, false);
+
+        // The query index of firstTrueIt where the resolving starts
+        uint32_t resolveQueryIndex = std::distance(availability.begin(), firstTrueIt);
+        // The queries count between firstTrueIt and nextFalseIt need to be resolved
+        uint32_t resolveQueryCount = std::distance(firstTrueIt, nextFalseIt);
+
+        // Calculate destinationOffset based on the current resolveQueryIndex and firstQuery
+        uint32_t resolveDestinationOffset =
+            destinationOffset + (resolveQueryIndex - firstQuery) * sizeof(uint64_t);
+
+        // Resolve the queries between firstTrueIt and nextFalseIt (which is at most lastIt)
+        device->fn.CmdCopyQueryPoolResults(commands, querySet->GetHandle(), resolveQueryIndex,
+                                           resolveQueryCount, destination->GetHandle(),
+                                           resolveDestinationOffset, sizeof(uint64_t),
+                                           VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+        // Set current iterator to next false
+        currentIt = nextFalseIt;
+    }
+}
+
+}  // anonymous namespace
+
 MaybeError RecordBeginRenderPass(CommandRecordingContext* recordingContext,
                                  Device* device,
                                  BeginRenderPassCmd* renderPass) {
@@ -272,8 +366,7 @@ MaybeError RecordBeginRenderPass(CommandRecordingContext* recordingContext,
     {
         RenderPassCacheQuery query;
 
-        for (ColorAttachmentIndex i :
-             IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
+        for (auto i : IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
             const auto& attachmentInfo = renderPass->colorAttachments[i];
             bool hasResolveTarget = attachmentInfo.resolveTarget != nullptr;
 
@@ -304,15 +397,21 @@ MaybeError RecordBeginRenderPass(CommandRecordingContext* recordingContext,
         // Fill in the attachment info that will be chained in the framebuffer create info.
         std::array<VkImageView, kMaxColorAttachments * 2 + 1> attachments;
 
-        for (ColorAttachmentIndex i :
-             IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
+        for (auto i : IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
             auto& attachmentInfo = renderPass->colorAttachments[i];
             TextureView* view = ToBackend(attachmentInfo.view.Get());
             if (view == nullptr) {
                 continue;
             }
 
-            attachments[attachmentCount] = view->GetHandle();
+            if (view->GetDimension() == wgpu::TextureViewDimension::e3D) {
+                VkImageView handleFor2DViewOn3D;
+                DAWN_TRY_ASSIGN(handleFor2DViewOn3D,
+                                view->GetOrCreate2DViewOn3D(attachmentInfo.depthSlice));
+                attachments[attachmentCount] = handleFor2DViewOn3D;
+            } else {
+                attachments[attachmentCount] = view->GetHandle();
+            }
 
             switch (view->GetFormat().GetAspectInfo(Aspect::Color).baseType) {
                 case TextureComponentType::Float: {
@@ -355,8 +454,7 @@ MaybeError RecordBeginRenderPass(CommandRecordingContext* recordingContext,
             attachmentCount++;
         }
 
-        for (ColorAttachmentIndex i :
-             IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
+        for (auto i : IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
             if (renderPass->colorAttachments[i].resolveTarget != nullptr) {
                 TextureView* view = ToBackend(renderPass->colorAttachments[i].resolveTarget.Get());
 
@@ -403,99 +501,6 @@ MaybeError RecordBeginRenderPass(CommandRecordingContext* recordingContext,
 
     return {};
 }
-
-// Reset the query sets used on render pass because the reset command must be called outside
-// render pass.
-void ResetUsedQuerySetsOnRenderPass(Device* device,
-                                    VkCommandBuffer commands,
-                                    QuerySetBase* querySet,
-                                    const std::vector<bool>& availability) {
-    DAWN_ASSERT(availability.size() == querySet->GetQueryAvailability().size());
-
-    auto currentIt = availability.begin();
-    auto lastIt = availability.end();
-    // Traverse the used queries which availability are true.
-    while (currentIt != lastIt) {
-        auto firstTrueIt = std::find(currentIt, lastIt, true);
-        // No used queries need to be reset
-        if (firstTrueIt == lastIt) {
-            break;
-        }
-
-        auto nextFalseIt = std::find(firstTrueIt, lastIt, false);
-
-        uint32_t queryIndex = std::distance(availability.begin(), firstTrueIt);
-        uint32_t queryCount = std::distance(firstTrueIt, nextFalseIt);
-
-        // Reset the queries between firstTrueIt and nextFalseIt (which is at most
-        // lastIt)
-        device->fn.CmdResetQueryPool(commands, ToBackend(querySet)->GetHandle(), queryIndex,
-                                     queryCount);
-
-        // Set current iterator to next false
-        currentIt = nextFalseIt;
-    }
-}
-
-void RecordWriteTimestampCmd(CommandRecordingContext* recordingContext,
-                             Device* device,
-                             QuerySetBase* querySet,
-                             uint32_t queryIndex,
-                             bool isRenderPass) {
-    VkCommandBuffer commands = recordingContext->commandBuffer;
-
-    // The queries must be reset between uses, and the reset command cannot be called in render
-    // pass.
-    if (!isRenderPass) {
-        device->fn.CmdResetQueryPool(commands, ToBackend(querySet)->GetHandle(), queryIndex, 1);
-    }
-
-    device->fn.CmdWriteTimestamp(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 ToBackend(querySet)->GetHandle(), queryIndex);
-}
-
-void RecordResolveQuerySetCmd(VkCommandBuffer commands,
-                              Device* device,
-                              QuerySet* querySet,
-                              uint32_t firstQuery,
-                              uint32_t queryCount,
-                              Buffer* destination,
-                              uint64_t destinationOffset) {
-    const std::vector<bool>& availability = querySet->GetQueryAvailability();
-
-    auto currentIt = availability.begin() + firstQuery;
-    auto lastIt = availability.begin() + firstQuery + queryCount;
-
-    // Traverse available queries in the range of [firstQuery, firstQuery +  queryCount - 1]
-    while (currentIt != lastIt) {
-        auto firstTrueIt = std::find(currentIt, lastIt, true);
-        // No available query found for resolving
-        if (firstTrueIt == lastIt) {
-            break;
-        }
-        auto nextFalseIt = std::find(firstTrueIt, lastIt, false);
-
-        // The query index of firstTrueIt where the resolving starts
-        uint32_t resolveQueryIndex = std::distance(availability.begin(), firstTrueIt);
-        // The queries count between firstTrueIt and nextFalseIt need to be resolved
-        uint32_t resolveQueryCount = std::distance(firstTrueIt, nextFalseIt);
-
-        // Calculate destinationOffset based on the current resolveQueryIndex and firstQuery
-        uint32_t resolveDestinationOffset =
-            destinationOffset + (resolveQueryIndex - firstQuery) * sizeof(uint64_t);
-
-        // Resolve the queries between firstTrueIt and nextFalseIt (which is at most lastIt)
-        device->fn.CmdCopyQueryPoolResults(commands, querySet->GetHandle(), resolveQueryIndex,
-                                           resolveQueryCount, destination->GetHandle(),
-                                           resolveDestinationOffset, sizeof(uint64_t),
-                                           VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-
-        // Set current iterator to next false
-        currentIt = nextFalseIt;
-    }
-}
-
-}  // anonymous namespace
 
 // static
 Ref<CommandBuffer> CommandBuffer::Create(CommandEncoder* encoder,
@@ -869,7 +874,7 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
                 WriteTimestampCmd* cmd = mCommands.NextCommand<WriteTimestampCmd>();
 
                 RecordWriteTimestampCmd(recordingContext, device, cmd->querySet.Get(),
-                                        cmd->queryIndex, false);
+                                        cmd->queryIndex, false, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
                 break;
             }
 
@@ -974,7 +979,8 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
         wgpu::kQuerySetIndexUndefined) {
         RecordWriteTimestampCmd(recordingContext, device,
                                 computePassCmd->timestampWrites.querySet.Get(),
-                                computePassCmd->timestampWrites.beginningOfPassWriteIndex, false);
+                                computePassCmd->timestampWrites.beginningOfPassWriteIndex, false,
+                                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
     }
 
     VkCommandBuffer commands = recordingContext->commandBuffer;
@@ -991,9 +997,10 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
                 // Write timestamp at the end of compute pass if it's set.
                 if (computePassCmd->timestampWrites.endOfPassWriteIndex !=
                     wgpu::kQuerySetIndexUndefined) {
-                    RecordWriteTimestampCmd(
-                        recordingContext, device, computePassCmd->timestampWrites.querySet.Get(),
-                        computePassCmd->timestampWrites.endOfPassWriteIndex, false);
+                    RecordWriteTimestampCmd(recordingContext, device,
+                                            computePassCmd->timestampWrites.querySet.Get(),
+                                            computePassCmd->timestampWrites.endOfPassWriteIndex,
+                                            false, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
                 }
                 return {};
             }
@@ -1102,7 +1109,7 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
                 WriteTimestampCmd* cmd = mCommands.NextCommand<WriteTimestampCmd>();
 
                 RecordWriteTimestampCmd(recordingContext, device, cmd->querySet.Get(),
-                                        cmd->queryIndex, false);
+                                        cmd->queryIndex, false, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
                 break;
             }
 
@@ -1120,14 +1127,17 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
     Device* device = ToBackend(GetDevice());
     VkCommandBuffer commands = recordingContext->commandBuffer;
 
-    DAWN_TRY(RecordBeginRenderPass(recordingContext, device, renderPassCmd));
-
     // Write timestamp at the beginning of render pass if it's set.
+    // We've observed that this must be called before the render pass or the timestamps produced
+    // are nonsensical on multiple Android devices.
     if (renderPassCmd->timestampWrites.beginningOfPassWriteIndex != wgpu::kQuerySetIndexUndefined) {
         RecordWriteTimestampCmd(recordingContext, device,
                                 renderPassCmd->timestampWrites.querySet.Get(),
-                                renderPassCmd->timestampWrites.beginningOfPassWriteIndex, true);
+                                renderPassCmd->timestampWrites.beginningOfPassWriteIndex, true,
+                                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
     }
+
+    DAWN_TRY(RecordBeginRenderPass(recordingContext, device, renderPassCmd));
 
     // Set the default value for the dynamic state
     {
@@ -1333,15 +1343,19 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
             case Command::EndRenderPass: {
                 mCommands.NextCommand<EndRenderPassCmd>();
 
+                device->fn.CmdEndRenderPass(commands);
+
                 // Write timestamp at the end of render pass if it's set.
+                // We've observed that this must be called after the render pass ends or the
+                // timestamps produced are nonsensical on multiple Android devices.
                 if (renderPassCmd->timestampWrites.endOfPassWriteIndex !=
                     wgpu::kQuerySetIndexUndefined) {
-                    RecordWriteTimestampCmd(
-                        recordingContext, device, renderPassCmd->timestampWrites.querySet.Get(),
-                        renderPassCmd->timestampWrites.endOfPassWriteIndex, true);
+                    RecordWriteTimestampCmd(recordingContext, device,
+                                            renderPassCmd->timestampWrites.querySet.Get(),
+                                            renderPassCmd->timestampWrites.endOfPassWriteIndex,
+                                            true, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
                 }
 
-                device->fn.CmdEndRenderPass(commands);
                 return {};
             }
 
@@ -1435,7 +1449,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                 WriteTimestampCmd* cmd = mCommands.NextCommand<WriteTimestampCmd>();
 
                 RecordWriteTimestampCmd(recordingContext, device, cmd->querySet.Get(),
-                                        cmd->queryIndex, true);
+                                        cmd->queryIndex, true, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
                 break;
             }
 

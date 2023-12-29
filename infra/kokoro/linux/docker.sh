@@ -143,6 +143,7 @@ if [ "$BUILD_SYSTEM" == "cmake" ]; then
     COMMON_CMAKE_FLAGS+=" -DTINT_BUILD_SPV_WRITER=1"
     COMMON_CMAKE_FLAGS+=" -DTINT_BUILD_WGSL_WRITER=1"
     COMMON_CMAKE_FLAGS+=" -DTINT_RANDOMIZE_HASHES=1"
+    COMMON_CMAKE_FLAGS+=" -DDAWN_USE_BUILT_DXC=1"
 
     if [ "$BUILD_TOOLCHAIN" == "clang" ]; then
         using clang-13.0.1
@@ -196,6 +197,13 @@ if [ "$BUILD_SYSTEM" == "cmake" ]; then
         ./tint_unittests
     hide_cmds
 
+    if [ -f ./tint_wgsl_fuzzer ]; then
+        status "Checking fuzzers"
+        show_cmds
+            ${SRC_DIR}/tools/run fuzz --check --build ${BUILD_DIR}
+        hide_cmds
+    fi
+
     if [ -f ./tint_ast_fuzzer_unittests ]; then
         status "Running tint_ast_fuzzer_unittests"
         show_cmds
@@ -239,7 +247,7 @@ if [ "$BUILD_SYSTEM" == "cmake" ]; then
             -DTINT_BUILD_GLSL_WRITER=OFF \
             -DTINT_BUILD_GLSL_VALIDATOR=OFF \
             -DTINT_BUILD_BENCHMARKS=OFF
-        cmake --build . -- tint --jobs=$(nproc)
+        cmake --build . --target tint_cmd_tint_cmd -- --jobs=$(nproc)
         cmake ${SRC_DIR} ${CMAKE_FLAGS} ${COMMON_CMAKE_FLAGS} \
             -DTINT_BUILD_SPV_READER=ON \
             -DTINT_BUILD_SPV_WRITER=ON \

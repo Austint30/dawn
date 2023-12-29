@@ -44,7 +44,7 @@ namespace dawn::native::d3d12 {
 
 Ref<ComputePipeline> ComputePipeline::CreateUninitialized(
     Device* device,
-    const ComputePipelineDescriptor* descriptor) {
+    const UnpackedPtr<ComputePipelineDescriptor>& descriptor) {
     return AcquireRef(new ComputePipeline(device, descriptor));
 }
 
@@ -75,8 +75,15 @@ MaybeError ComputePipeline::Initialize() {
     d3dDesc.pRootSignature = ToBackend(GetLayout())->GetRootSignature();
 
     d3d::CompiledShader compiledShader;
-    DAWN_TRY_ASSIGN(compiledShader, module->Compile(computeStage, SingleShaderStage::Compute,
-                                                    ToBackend(GetLayout()), compileFlags));
+    DAWN_TRY_ASSIGN(
+        compiledShader,
+        module->Compile(
+            computeStage, SingleShaderStage::Compute, ToBackend(GetLayout()), compileFlags,
+            /* usedInterstageVariables */ {},
+            /* maxSubgroupSizeForFullSubgroups */
+            IsFullSubgroupsRequired()
+                ? std::make_optional(device->GetLimits().experimentalSubgroupLimits.maxSubgroupSize)
+                : std::nullopt));
     d3dDesc.CS = {compiledShader.shaderBlob.Data(), compiledShader.shaderBlob.Size()};
 
     StreamIn(&mCacheKey, d3dDesc, ToBackend(GetLayout())->GetRootSignatureBlob());

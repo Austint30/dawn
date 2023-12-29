@@ -37,6 +37,7 @@
 include(lang/spirv/reader/ast_lower/BUILD.cmake)
 include(lang/spirv/reader/ast_parser/BUILD.cmake)
 include(lang/spirv/reader/common/BUILD.cmake)
+include(lang/spirv/reader/parser/BUILD.cmake)
 
 if(TINT_BUILD_SPV_READER)
 ################################################################################
@@ -50,13 +51,16 @@ tint_add_target(tint_lang_spirv_reader lib
 )
 
 tint_target_add_dependencies(tint_lang_spirv_reader lib
+  tint_api_common
   tint_lang_core
   tint_lang_core_constant
+  tint_lang_core_ir
   tint_lang_core_type
   tint_lang_spirv_reader_common
   tint_lang_wgsl
   tint_lang_wgsl_ast
   tint_lang_wgsl_common
+  tint_lang_wgsl_features
   tint_lang_wgsl_program
   tint_lang_wgsl_sem
   tint_utils_containers
@@ -77,6 +81,7 @@ tint_target_add_dependencies(tint_lang_spirv_reader lib
 if(TINT_BUILD_SPV_READER)
   tint_target_add_dependencies(tint_lang_spirv_reader lib
     tint_lang_spirv_reader_ast_parser
+    tint_lang_spirv_reader_parser
   )
 endif(TINT_BUILD_SPV_READER)
 

@@ -3132,7 +3132,7 @@ void Resolver::CollectTextureSamplerPairs(sem::Function* func,
             auto* texture = user->Variable();
             if (!texture_sampler_set.Contains(texture)) {
                 current_function_->AddTextureSamplerPair(texture, nullptr);
-                func->AddTextureSamplerPair(texture, nullptr);
+                func->AddTextureSamplerPair(param, nullptr);
                 texture_sampler_set.Add(texture);
             }
         } else if (param->Type()->Is<core::type::Sampler>()) {
@@ -3140,7 +3140,7 @@ void Resolver::CollectTextureSamplerPairs(sem::Function* func,
             auto* sampler = user->Variable();
             if (!texture_sampler_set.Contains(sampler)) {
                 current_function_->AddTextureSamplerPair(nullptr, sampler);
-                func->AddTextureSamplerPair(nullptr, sampler);
+                func->AddTextureSamplerPair(nullptr, param);
                 texture_sampler_set.Add(sampler);
             }
         }
@@ -4017,7 +4017,8 @@ bool Resolver::Requires(const ast::Requires* req) {
     for (auto feature : req->features) {
         if (!allowed_features_.features.count(feature)) {
             StringStream ss;
-            ss << "language feature '" << feature << "' is not allowed in the current environment";
+            ss << "language feature '" << wgsl::ToString(feature)
+               << "' is not allowed in the current environment";
             AddError(ss.str(), req->source);
             return false;
         }

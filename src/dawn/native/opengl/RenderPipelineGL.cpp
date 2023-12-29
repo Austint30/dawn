@@ -238,11 +238,12 @@ void ApplyDepthStencilState(const OpenGLFunctions& gl,
 // static
 Ref<RenderPipeline> RenderPipeline::CreateUninitialized(
     Device* device,
-    const RenderPipelineDescriptor* descriptor) {
+    const UnpackedPtr<RenderPipelineDescriptor>& descriptor) {
     return AcquireRef(new RenderPipeline(device, descriptor));
 }
 
-RenderPipeline::RenderPipeline(Device* device, const RenderPipelineDescriptor* descriptor)
+RenderPipeline::RenderPipeline(Device* device,
+                               const UnpackedPtr<RenderPipelineDescriptor>& descriptor)
     : RenderPipelineBase(device, descriptor),
       mVertexArrayObject(0),
       mGlPrimitiveTopology(GLPrimitiveTopology(GetPrimitiveTopology())) {}
@@ -268,8 +269,7 @@ GLenum RenderPipeline::GetGLPrimitiveTopology() const {
     return mGlPrimitiveTopology;
 }
 
-ityp::bitset<VertexAttributeLocation, kMaxVertexAttributes>
-RenderPipeline::GetAttributesUsingVertexBuffer(VertexBufferSlot slot) const {
+VertexAttributeMask RenderPipeline::GetAttributesUsingVertexBuffer(VertexBufferSlot slot) const {
     DAWN_ASSERT(!IsError());
     return mAttributesUsingVertexBuffer[slot];
 }
@@ -338,12 +338,12 @@ void RenderPipeline::ApplyNow(PersistentPipelineState& persistentPipelineState) 
     }
 
     if (!GetDevice()->IsToggleEnabled(Toggle::DisableIndexedDrawBuffers)) {
-        for (ColorAttachmentIndex attachmentSlot : IterateBitSet(GetColorAttachmentsMask())) {
+        for (auto attachmentSlot : IterateBitSet(GetColorAttachmentsMask())) {
             ApplyColorState(gl, attachmentSlot, GetColorTargetState(attachmentSlot));
         }
     } else {
         const ColorTargetState* prevDescriptor = nullptr;
-        for (ColorAttachmentIndex attachmentSlot : IterateBitSet(GetColorAttachmentsMask())) {
+        for (auto attachmentSlot : IterateBitSet(GetColorAttachmentsMask())) {
             const ColorTargetState* descriptor = GetColorTargetState(attachmentSlot);
             if (!prevDescriptor) {
                 ApplyColorState(gl, descriptor);

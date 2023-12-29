@@ -86,9 +86,9 @@ var directoryGlobs = []string{
 // is uninteresting.
 // These paths use unix-style slashes and do not contain the '/test/tint' prefix.
 var dirsWithNoPassExpectations = []string{
-	dawnRoot + "/test/tint/benchmark/",
-	dawnRoot + "/test/tint/unittest/",
-	dawnRoot + "/test/tint/vk-gl-cts/",
+	filepath.ToSlash(dawnRoot) + "/test/tint/benchmark/",
+	filepath.ToSlash(dawnRoot) + "/test/tint/unittest/",
+	filepath.ToSlash(dawnRoot) + "/test/tint/vk-gl-cts/",
 }
 
 func main() {
@@ -256,9 +256,16 @@ func run() error {
 		{defaultMSLExe, "msl", &xcrunPath},
 	} {
 		if *tool.path == "" {
-			p, err := exec.LookPath(tool.name)
+			// Look first in the directory of the tint executable
+			p, err := exec.LookPath(filepath.Join(filepath.Dir(tintPath), tool.name))
 			if err == nil && fileutils.IsExe(p) {
 				*tool.path = p
+			} else {
+				// Look in PATH
+				p, err := exec.LookPath(tool.name)
+				if err == nil && fileutils.IsExe(p) {
+					*tool.path = p
+				}
 			}
 		} else if !fileutils.IsExe(*tool.path) {
 			return fmt.Errorf("%v not found at '%v'", tool.name, *tool.path)
@@ -285,7 +292,7 @@ func run() error {
 	}
 	fmt.Println()
 
-	validationCache := loadValidationCache(fmt.Sprintf("%x", toolchainHash.Sum(nil)))
+	validationCache := loadValidationCache(fmt.Sprintf("%x", toolchainHash.Sum(nil)), verbose)
 	defer saveValidationCache(validationCache)
 
 	// Build the list of results.
@@ -303,7 +310,6 @@ func run() error {
 
 	// Spawn numCPU job runners...
 	runCfg := runConfig{
-		rootPath:         rootPath,
 		tintPath:         tintPath,
 		dxcPath:          dxcPath,
 		fxcPath:          fxcPath,
@@ -413,6 +419,7 @@ func run() error {
 	newKnownGood := knownGoodHashes{}
 
 	for i, file := range relFiles {
+		absFile := absFiles[i]
 		results := results[i]
 
 		row := &strings.Builder{}
@@ -431,7 +438,7 @@ func run() error {
 			result := <-results[format]
 
 			// Update the known-good hashes
-			newKnownGood[fileAndFormat{file, format}] = result.passHashes
+			newKnownGood[fileAndFormat{absFile, format}] = result.passHashes
 
 			// Update stats
 			stats := statsByFmt[format]
@@ -584,7 +591,7 @@ func run() error {
 	fmt.Println()
 
 	if allStats.numFail > 0 {
-		os.Exit(1)
+		return fmt.Errorf("%v tests failed", allStats.numFail)
 	}
 
 	return nil
@@ -614,7 +621,6 @@ type job struct {
 }
 
 type runConfig struct {
-	rootPath         string
 	tintPath         string
 	dxcPath          string
 	fxcPath          string
@@ -708,7 +714,7 @@ func (j job) run(cfg runConfig) {
 		args = append(args, j.flags...)
 
 		start := time.Now()
-		ok, out = invoke(cfg.rootPath, cfg.tintPath, args...)
+		ok, out = invoke(cfg.tintPath, args...)
 		timeTaken := time.Since(start)
 
 		out = strings.ReplaceAll(out, "\r\n", "\n")
@@ -718,7 +724,7 @@ func (j job) run(cfg runConfig) {
 
 		canEmitPassExpectationFile := true
 		for _, noPass := range dirsWithNoPassExpectations {
-			if strings.HasPrefix(j.file, noPass) {
+			if strings.HasPrefix(filepath.ToSlash(j.file), noPass) {
 				canEmitPassExpectationFile = false
 				break
 			}
@@ -882,12 +888,11 @@ func percentage(n, total int) string {
 }
 
 // invoke runs the executable 'exe' with the provided arguments.
-func invoke(wd, exe string, args ...string) (ok bool, output string) {
+func invoke(exe string, args ...string) (ok bool, output string) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, exe, args...)
-	cmd.Dir = wd
 	out, err := cmd.CombinedOutput()
 	str := string(out)
 	if err != nil {
@@ -956,12 +961,14 @@ type validationCache struct {
 // A map of fileAndFormat to known-good (validated) output hashes.
 type knownGoodHashes map[fileAndFormat][]string
 
-// The serialized form of a known-good validation.cache file
+// ValidationCacheFile is the serialized form of a known-good validation.cache file
 type ValidationCacheFile struct {
 	ToolchainHash string
 	KnownGood     []ValidationCacheFileKnownGood
 }
 
+// ValidationCacheFileKnownGood holds a single record for a known-to-pass test output, given the
+// target format and tool hashes.
 type ValidationCacheFileKnownGood struct {
 	File   string
 	Format outputFormat
@@ -974,7 +981,7 @@ func validationCachePath() string {
 
 // loadValidationCache attempts to load the validation cache.
 // Returns an empty cache if the file could not be loaded, or if toolchains have changed.
-func loadValidationCache(toolchainHash string) validationCache {
+func loadValidationCache(toolchainHash string, verbose bool) validationCache {
 	out := validationCache{
 		toolchainHash: toolchainHash,
 		knownGood:     knownGoodHashes{},
@@ -982,12 +989,18 @@ func loadValidationCache(toolchainHash string) validationCache {
 
 	file, err := os.Open(validationCachePath())
 	if err != nil {
+		if verbose {
+			fmt.Println(err)
+		}
 		return out
 	}
 	defer file.Close()
 
 	content := ValidationCacheFile{}
 	if err := json.NewDecoder(file).Decode(&content); err != nil {
+		if verbose {
+			fmt.Println(err)
+		}
 		return out
 	}
 
@@ -1006,7 +1019,7 @@ func loadValidationCache(toolchainHash string) validationCache {
 }
 
 // saveValidationCache saves the validation cache file.
-func saveValidationCache(vc validationCache) error {
+func saveValidationCache(vc validationCache) {
 	out := ValidationCacheFile{
 		ToolchainHash: vc.toolchainHash,
 		KnownGood:     make([]ValidationCacheFileKnownGood, 0, len(vc.knownGood)),
@@ -1036,13 +1049,15 @@ func saveValidationCache(vc validationCache) error {
 
 	file, err := os.Create(validationCachePath())
 	if err != nil {
-		return fmt.Errorf("failed to save the validation cache file: %w", err)
+		fmt.Printf("WARNING: failed to save the validation cache file: %v\n", err)
 	}
 	defer file.Close()
 
 	enc := json.NewEncoder(file)
 	enc.SetIndent("", "  ")
-	return enc.Encode(&out)
+	if err := enc.Encode(&out); err != nil {
+		fmt.Printf("WARNING: failed to encode the validation cache file: %v\n", err)
+	}
 }
 
 // defaultRootPath returns the default path to the root of the test tree

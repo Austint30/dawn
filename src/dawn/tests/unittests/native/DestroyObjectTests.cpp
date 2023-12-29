@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "dawn/native/ChainUtils.h"
 #include "dawn/native/Toggles.h"
 #include "dawn/native/utils/WGPUHelpers.h"
 #include "dawn/tests/DawnNativeTest.h"
@@ -282,7 +283,8 @@ TEST_F(DestroyObjectTests, MappedBufferImplicit) {
 
 TEST_F(DestroyObjectTests, CommandBufferNativeExplicit) {
     CommandEncoderDescriptor commandEncoderDesc = {};
-    Ref<CommandEncoder> commandEncoder = CommandEncoder::Create(mDeviceMock, &commandEncoderDesc);
+    Ref<CommandEncoder> commandEncoder =
+        CommandEncoder::Create(mDeviceMock, Unpack(&commandEncoderDesc));
 
     CommandBufferDescriptor commandBufferDesc = {};
 

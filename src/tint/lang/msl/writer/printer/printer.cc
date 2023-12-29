@@ -34,20 +34,35 @@
 #include "src/tint/lang/core/constant/composite.h"
 #include "src/tint/lang/core/constant/splat.h"
 #include "src/tint/lang/core/fluent_types.h"
+#include "src/tint/lang/core/ir/access.h"
 #include "src/tint/lang/core/ir/binary.h"
 #include "src/tint/lang/core/ir/bitcast.h"
+#include "src/tint/lang/core/ir/break_if.h"
 #include "src/tint/lang/core/ir/constant.h"
 #include "src/tint/lang/core/ir/construct.h"
+#include "src/tint/lang/core/ir/continue.h"
+#include "src/tint/lang/core/ir/convert.h"
+#include "src/tint/lang/core/ir/core_builtin_call.h"
 #include "src/tint/lang/core/ir/discard.h"
 #include "src/tint/lang/core/ir/exit_if.h"
+#include "src/tint/lang/core/ir/exit_loop.h"
+#include "src/tint/lang/core/ir/exit_switch.h"
 #include "src/tint/lang/core/ir/ice.h"
 #include "src/tint/lang/core/ir/if.h"
 #include "src/tint/lang/core/ir/let.h"
 #include "src/tint/lang/core/ir/load.h"
+#include "src/tint/lang/core/ir/load_vector_element.h"
 #include "src/tint/lang/core/ir/module.h"
 #include "src/tint/lang/core/ir/multi_in_block.h"
+#include "src/tint/lang/core/ir/next_iteration.h"
 #include "src/tint/lang/core/ir/return.h"
+#include "src/tint/lang/core/ir/store.h"
+#include "src/tint/lang/core/ir/store_vector_element.h"
+#include "src/tint/lang/core/ir/switch.h"
+#include "src/tint/lang/core/ir/swizzle.h"
+#include "src/tint/lang/core/ir/terminate_invocation.h"
 #include "src/tint/lang/core/ir/unreachable.h"
+#include "src/tint/lang/core/ir/user_call.h"
 #include "src/tint/lang/core/ir/validator.h"
 #include "src/tint/lang/core/ir/var.h"
 #include "src/tint/lang/core/type/array.h"
@@ -68,6 +83,8 @@
 #include "src/tint/lang/core/type/u32.h"
 #include "src/tint/lang/core/type/vector.h"
 #include "src/tint/lang/core/type/void.h"
+#include "src/tint/lang/msl/barrier_type.h"
+#include "src/tint/lang/msl/ir/builtin_call.h"
 #include "src/tint/lang/msl/writer/common/printer_support.h"
 #include "src/tint/utils/containers/map.h"
 #include "src/tint/utils/generator/text_generator.h"
@@ -119,6 +136,9 @@ class Printer : public tint::TextGenerator {
 
     core::ir::Module& ir_;
 
+    /// A hashmap of value to name
+    Hashmap<const core::ir::Value*, std::string, 32> names_;
+
     /// The buffer holding preamble text
     TextBuffer preamble_buffer_;
 
@@ -167,6 +187,9 @@ class Printer : public tint::TextGenerator {
 
     /// Values that can be inlined.
     Hashset<core::ir::Value*, 64> can_inline_;
+
+    /// Block to emit for a continuing
+    std::function<void()> emit_continuing_;
 
     /// @returns the name of the templated `tint_array` helper type, generating it if needed
     const std::string& ArrayTemplateName() {
@@ -223,9 +246,66 @@ class Printer : public tint::TextGenerator {
             // TODO(dsinclair): Handle return type attributes
 
             EmitType(out, func->ReturnType());
-            out << " " << ir_.NameOf(func).Name() << "() {";
+            out << " " << NameOf(func) << "(";
 
-            // TODO(dsinclair): Emit Function parameters
+            size_t i = 0;
+            for (auto* param : func->Params()) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                ++i;
+
+                // TODO(dsinclair): Handle parameter attributes
+                EmitType(out, param->Type());
+                out << " ";
+
+                // Non-entrypoint pointers are set to `const` for the value
+                if (func->Stage() == core::ir::Function::PipelineStage::kUndefined &&
+                    param->Type()->Is<core::type::Pointer>()) {
+                    out << "const ";
+                }
+
+                out << NameOf(param);
+
+                if (param->Builtin().has_value()) {
+                    out << " [[";
+                    switch (param->Builtin().value()) {
+                        case core::ir::FunctionParam::Builtin::kFrontFacing:
+                            out << "front_facing";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kGlobalInvocationId:
+                            out << "thread_position_in_grid";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kLocalInvocationId:
+                            out << "thread_position_in_threadgroup";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kLocalInvocationIndex:
+                            out << "thread_index_in_threadgroup";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kNumWorkgroups:
+                            out << "threadgroups_per_grid";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kPosition:
+                            out << "position";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kSampleIndex:
+                            out << "sample_id";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kSampleMask:
+                            out << "sample_mask";
+                            break;
+                        case core::ir::FunctionParam::Builtin::kWorkgroupId:
+                            out << "threadgroup_position_in_grid";
+                            break;
+
+                        default:
+                            break;
+                    }
+                    out << "]]";
+                }
+            }
+
+            out << ") {";
         }
         {
             ScopedIndent si(current_buffer_);
@@ -247,58 +327,78 @@ class Printer : public tint::TextGenerator {
         for (auto* inst : *block) {
             Switch(
                 inst,                                                //
-                [&](core::ir::ExitIf* e) { EmitExitIf(e); },         //
-                [&](core::ir::If* if_) { EmitIf(if_); },             //
-                [&](core::ir::Return* r) { EmitReturn(r); },         //
-                [&](core::ir::Unreachable*) { EmitUnreachable(); },  //
-                [&](core::ir::Var* v) { EmitVar(v); },               //
+                [&](core::ir::BreakIf* i) { EmitBreakIf(i); },       //
+                [&](core::ir::Continue*) { EmitContinue(); },        //
                 [&](core::ir::Discard*) { EmitDiscard(); },          //
+                [&](core::ir::ExitIf* i) { EmitExitIf(i); },         //
+                [&](core::ir::ExitLoop*) { EmitExitLoop(); },        //
+                [&](core::ir::ExitSwitch*) { EmitExitSwitch(); },    //
+                [&](core::ir::If* i) { EmitIf(i); },                 //
+                [&](core::ir::Let* i) { EmitLet(i); },               //
+                [&](core::ir::Loop* i) { EmitLoop(i); },             //
+                [&](core::ir::NextIteration*) { /* do nothing */ },  //
+                [&](core::ir::Return* i) { EmitReturn(i); },         //
+                [&](core::ir::Store* i) { EmitStore(i); },           //
+                [&](core::ir::Switch* i) { EmitSwitch(i); },         //
+                [&](core::ir::Unreachable*) { EmitUnreachable(); },  //
+                [&](core::ir::Call* i) { EmitCallStmt(i); },         //
+                [&](core::ir::Var* i) { EmitVar(i); },               //
+                [&](core::ir::StoreVectorElement* e) { EmitStoreVectorElement(e); },
+                [&](core::ir::TerminateInvocation*) { EmitDiscard(); },  //
 
-                [&](core::ir::Bitcast*) { MaybeEmitInstruction(inst); },    //
-                [&](core::ir::Binary*) { MaybeEmitInstruction(inst); },     //
-                [&](core::ir::Let* l) { EmitLet(l); },                      //
-                [&](core::ir::Load*) { MaybeEmitInstruction(inst); },       //
-                [&](core::ir::Construct*) { MaybeEmitInstruction(inst); },  //
+                [&](core::ir::LoadVectorElement*) { /* inlined */ },  //
+                [&](core::ir::Swizzle*) { /* inlined */ },            //
+                [&](core::ir::Bitcast*) { /* inlined */ },            //
+                [&](core::ir::Unary*) { /* inlined */ },              //
+                [&](core::ir::Binary*) { /* inlined */ },             //
+                [&](core::ir::Load*) { /* inlined */ },               //
+                [&](core::ir::Construct*) { /* inlined */ },          //
+                [&](core::ir::Access*) { /* inlined */ },             //
                 TINT_ICE_ON_NO_MATCH);
         }
-    }
-
-    // If the instruction is named, we need to emit it. If it is un-named, then we'll use it
-    // and inline it later.
-    void MaybeEmitInstruction(const core::ir::Instruction* inst) {
-        auto name = ir_.NameOf(inst->Result());
-        if (!name.IsValid()) {
-            return;
-        }
-
-        auto out = Line();
-        EmitType(out, inst->Result()->Type());
-        out << " const " << name.Name() << " = ";
-        EmitValue(out, inst->Result());
-        out << ";";
     }
 
     void EmitValue(StringStream& out, const core::ir::Value* v) {
         Switch(
             v,                                                           //
             [&](const core::ir::Constant* c) { EmitConstant(out, c); },  //
-            // [&](core::ir::FunctionParam* fp) {},                   //
             [&](const core::ir::InstructionResult* r) {
                 Switch(
-                    r->Source(),                                             //
-                    [&](const core::ir::Binary* b) { EmitBinary(out, b); },  //
-                    [&](const core::ir::Let* l) {
-                        auto name = ir_.NameOf(l->Result());
-                        TINT_ASSERT(name.IsValid());
-                        out << name.Name();
-                    },                                                             //
-                    [&](const core::ir::Load* l) { EmitValue(out, l->From()); },   //
-                    [&](const core::ir::Construct* c) { EmitConstruct(out, c); },  //
-                    [&](const core::ir::Var* var) { EmitVarName(out, var); },      //
-                    [&](const core::ir::Bitcast* b) { EmitBitcast(out, b); },      //
+                    r->Instruction(),                                                          //
+                    [&](const core::ir::Unary* u) { EmitUnary(out, u); },                      //
+                    [&](const core::ir::Binary* b) { EmitBinary(out, b); },                    //
+                    [&](const core::ir::Convert* b) { EmitConvert(out, b); },                  //
+                    [&](const core::ir::Let* l) { out << NameOf(l->Result(0)); },              //
+                    [&](const core::ir::Load* l) { EmitValue(out, l->From()); },               //
+                    [&](const core::ir::Construct* c) { EmitConstruct(out, c); },              //
+                    [&](const core::ir::Var* var) { out << NameOf(var->Result(0)); },          //
+                    [&](const core::ir::Bitcast* b) { EmitBitcast(out, b); },                  //
+                    [&](const core::ir::Access* a) { EmitAccess(out, a); },                    //
+                    [&](const msl::ir::BuiltinCall* c) { EmitMslBuiltinCall(out, c); },        //
+                    [&](const core::ir::CoreBuiltinCall* c) { EmitCoreBuiltinCall(out, c); },  //
+                    [&](const core::ir::UserCall* c) { EmitUserCall(out, c); },                //
+                    [&](const core::ir::LoadVectorElement* e) {
+                        EmitLoadVectorElement(out, e);
+                    },                                                         //
+                    [&](const core::ir::Swizzle* s) { EmitSwizzle(out, s); },  //
                     TINT_ICE_ON_NO_MATCH);
-            },  //
+            },                                                            //
+            [&](const core::ir::FunctionParam* p) { out << NameOf(p); },  //
             TINT_ICE_ON_NO_MATCH);
+    }
+
+    void EmitUnary(StringStream& out, const core::ir::Unary* u) {
+        switch (u->Op()) {
+            case core::ir::UnaryOp::kNegation:
+                out << "-";
+                break;
+            case core::ir::UnaryOp::kComplement:
+                out << "~";
+                break;
+        }
+        out << "(";
+        EmitValue(out, u->Val());
+        out << ")";
     }
 
     /// Emit a binary instruction
@@ -361,14 +461,21 @@ class Printer : public tint::TextGenerator {
         out << ")";
     }
 
-    void EmitVarName(StringStream& out, const core::ir::Var* v) { out << ir_.NameOf(v).Name(); }
+    /// Emit a convert instruction
+    /// @param c the convert instruction
+    void EmitConvert(StringStream& out, const core::ir::Convert* c) {
+        EmitType(out, c->Result(0)->Type());
+        out << "(";
+        EmitValue(out, c->Operand(0));
+        out << ")";
+    }
 
     /// Emit a var instruction
     /// @param v the var instruction
     void EmitVar(core::ir::Var* v) {
         auto out = Line();
 
-        auto* ptr = v->Result()->Type()->As<core::type::Pointer>();
+        auto* ptr = v->Result(0)->Type()->As<core::type::Pointer>();
         TINT_ASSERT_OR_RETURN(ptr);
 
         auto space = ptr->AddressSpace();
@@ -387,10 +494,8 @@ class Printer : public tint::TextGenerator {
                 return;
         }
 
-        auto name = ir_.NameOf(v);
-
         EmitType(out, ptr->UnwrapPtr());
-        out << " " << name.Name();
+        out << " " << NameOf(v->Result(0));
 
         if (v->Initializer()) {
             out << " = ";
@@ -407,14 +512,130 @@ class Printer : public tint::TextGenerator {
     /// Emit a let instruction
     /// @param l the let instruction
     void EmitLet(core::ir::Let* l) {
-        auto name = ir_.NameOf(l->Result());
-        TINT_ASSERT(name.IsValid());
-
         auto out = Line();
-        EmitType(out, l->Result()->Type());
-        out << " const " << name.Name() << " = ";
+        EmitType(out, l->Result(0)->Type());
+        out << " const " << NameOf(l->Result(0)) << " = ";
         EmitValue(out, l->Value());
         out << ";";
+    }
+
+    void EmitExitLoop() { Line() << "break;"; }
+
+    void EmitBreakIf(core::ir::BreakIf* b) {
+        auto out = Line();
+        out << "if ";
+        EmitValue(out, b->Condition());
+        out << " { break; }";
+    }
+
+    void EmitContinue() {
+        if (emit_continuing_) {
+            emit_continuing_();
+        }
+        Line() << "continue;";
+    }
+
+    void EmitLoop(core::ir::Loop* l) {
+        // Note, we can't just emit the continuing inside a conditional at the top of the loop
+        // because any variable declared in the block must be visible to the continuing.
+        //
+        // loop {
+        //   var a = 3;
+        //   continue {
+        //     let y = a;
+        //   }
+        // }
+
+        auto emit_continuing = [&] { EmitBlock(l->Continuing()); };
+        TINT_SCOPED_ASSIGNMENT(emit_continuing_, emit_continuing);
+
+        Line() << "{";
+        {
+            ScopedIndent init(current_buffer_);
+            EmitBlock(l->Initializer());
+
+            Line() << "while(true) {";
+            {
+                ScopedIndent si(current_buffer_);
+                EmitBlock(l->Body());
+            }
+            Line() << "}";
+        }
+        Line() << "}";
+    }
+
+    void EmitExitSwitch() { Line() << "break;"; }
+
+    void EmitSwitch(core::ir::Switch* s) {
+        {
+            auto out = Line();
+            out << "switch(";
+            EmitValue(out, s->Condition());
+            out << ") {";
+        }
+        {
+            ScopedIndent blk(current_buffer_);
+            for (auto& case_ : s->Cases()) {
+                for (auto& sel : case_.selectors) {
+                    if (sel.IsDefault()) {
+                        Line() << "default:";
+                    } else {
+                        auto out = Line();
+                        out << "case ";
+                        EmitValue(out, sel.val);
+                        out << ":";
+                    }
+                }
+                Line() << "{";
+                {
+                    ScopedIndent ci(current_buffer_);
+                    EmitBlock(case_.block);
+                }
+                Line() << "}";
+            }
+        }
+        Line() << "}";
+    }
+
+    void EmitSwizzle(StringStream& out, const core::ir::Swizzle* swizzle) {
+        EmitValue(out, swizzle->Object());
+        out << ".";
+        for (const auto i : swizzle->Indices()) {
+            switch (i) {
+                case 0:
+                    out << "x";
+                    break;
+                case 1:
+                    out << "y";
+                    break;
+                case 2:
+                    out << "z";
+                    break;
+                case 3:
+                    out << "w";
+                    break;
+                default:
+                    TINT_UNREACHABLE();
+            }
+        }
+    }
+
+    void EmitStoreVectorElement(const core::ir::StoreVectorElement* l) {
+        auto out = Line();
+
+        EmitValue(out, l->To());
+        out << "[";
+        EmitValue(out, l->Index());
+        out << "] = ";
+        EmitValue(out, l->Value());
+        out << ";";
+    }
+
+    void EmitLoadVectorElement(StringStream& out, const core::ir::LoadVectorElement* l) {
+        EmitValue(out, l->From());
+        out << "[";
+        EmitValue(out, l->Index());
+        out << "]";
     }
 
     /// Emit an if instruction
@@ -452,7 +673,7 @@ class Printer : public tint::TextGenerator {
             auto* val = args[i];
 
             auto out = Line();
-            out << ir_.NameOf(phi).Name() << " = ";
+            out << NameOf(phi) << " = ";
             EmitValue(out, val);
             out << ";";
         }
@@ -482,21 +703,244 @@ class Printer : public tint::TextGenerator {
     /// Emit a discard instruction
     void EmitDiscard() { Line() << "discard_fragment();"; }
 
+    /// Emit a store
+    void EmitStore(core::ir::Store* s) {
+        auto out = Line();
+
+        EmitValue(out, s->To());
+        out << " = ";
+        EmitValue(out, s->From());
+        out << ";";
+    }
+
     /// Emit a bitcast instruction
     void EmitBitcast(StringStream& out, const core::ir::Bitcast* b) {
         out << "as_type<";
-        EmitType(out, b->Result()->Type());
+        EmitType(out, b->Result(0)->Type());
         out << ">(";
         EmitValue(out, b->Val());
+        out << ")";
+    }
+
+    /// Emit an accessor
+    void EmitAccess(StringStream& out, const core::ir::Access* a) {
+        EmitValue(out, a->Object());
+
+        auto* current_type = a->Object()->Type();
+        for (auto* index : a->Indices()) {
+            TINT_ASSERT(current_type);
+
+            current_type = current_type->UnwrapPtr();
+            Switch(
+                current_type,  //
+                [&](const core::type::Struct* s) {
+                    auto* c = index->As<core::ir::Constant>();
+                    auto* member = s->Members()[c->Value()->ValueAs<uint32_t>()];
+                    out << "." << member->Name().Name();
+                    current_type = member->Type();
+                },
+                [&](Default) {
+                    out << "[";
+                    EmitValue(out, index);
+                    out << "]";
+                    current_type = current_type->Element(0);
+                });
+        }
+    }
+
+    void EmitCallStmt(const core::ir::Call* c) {
+        if (!c->Result(0)->IsUsed()) {
+            auto out = Line();
+            EmitValue(out, c->Result(0));
+            out << ";";
+        }
+    }
+
+    void EmitMslBuiltinCall(StringStream& out, const msl::ir::BuiltinCall* c) {
+        switch (c->Func()) {
+            case msl::BuiltinFn::kThreadgroupBarrier: {
+                auto flags = c->Args()[0]->As<core::ir::Constant>()->Value()->ValueAs<uint8_t>();
+                out << "threadgroup_barrier(";
+                bool emitted_flag = false;
+
+                auto emit = [&](BarrierType type, const std::string& name) {
+                    if ((flags & type) != type) {
+                        return;
+                    }
+
+                    if (emitted_flag) {
+                        out << " | ";
+                    }
+                    emitted_flag = true;
+                    out << "mem_flags::mem_" << name;
+                };
+                emit(BarrierType::kDevice, "device");
+                emit(BarrierType::kThreadGroup, "threadgroup");
+                emit(BarrierType::kTexture, "texture");
+
+                out << ")";
+                return;
+            }
+            default:
+                TINT_ICE() << "undefined MSL ir function";
+                return;
+        }
+    }
+
+    void EmitCoreBuiltinCall(StringStream& out, const core::ir::CoreBuiltinCall* c) {
+        EmitCoreBuiltinName(out, c->Func());
+        out << "(";
+
+        size_t i = 0;
+        for (const auto* arg : c->Args()) {
+            if (i > 0) {
+                out << ", ";
+            }
+            ++i;
+
+            EmitValue(out, arg);
+        }
+        out << ")";
+    }
+
+    void EmitCoreBuiltinName(StringStream& out, core::BuiltinFn func) {
+        switch (func) {
+            case core::BuiltinFn::kAcos:
+            case core::BuiltinFn::kAcosh:
+            case core::BuiltinFn::kAll:
+            case core::BuiltinFn::kAny:
+            case core::BuiltinFn::kAsin:
+            case core::BuiltinFn::kAsinh:
+            case core::BuiltinFn::kAtan2:
+            case core::BuiltinFn::kAtan:
+            case core::BuiltinFn::kAtanh:
+            case core::BuiltinFn::kCeil:
+            case core::BuiltinFn::kClamp:
+            case core::BuiltinFn::kCos:
+            case core::BuiltinFn::kCosh:
+            case core::BuiltinFn::kCross:
+            case core::BuiltinFn::kDeterminant:
+            case core::BuiltinFn::kExp2:
+            case core::BuiltinFn::kExp:
+            case core::BuiltinFn::kFloor:
+            case core::BuiltinFn::kFma:
+            case core::BuiltinFn::kFract:
+            case core::BuiltinFn::kLdexp:
+            case core::BuiltinFn::kLog2:
+            case core::BuiltinFn::kLog:
+            case core::BuiltinFn::kMix:
+            case core::BuiltinFn::kNormalize:
+            case core::BuiltinFn::kPow:
+            case core::BuiltinFn::kReflect:
+            case core::BuiltinFn::kRefract:
+            case core::BuiltinFn::kSaturate:
+            case core::BuiltinFn::kSelect:
+            case core::BuiltinFn::kSign:
+            case core::BuiltinFn::kSin:
+            case core::BuiltinFn::kSinh:
+            case core::BuiltinFn::kSqrt:
+            case core::BuiltinFn::kStep:
+            case core::BuiltinFn::kTan:
+            case core::BuiltinFn::kTanh:
+            case core::BuiltinFn::kTranspose:
+            case core::BuiltinFn::kTrunc:
+                out << func;
+                break;
+            case core::BuiltinFn::kCountLeadingZeros:
+                out << "clz";
+                break;
+            case core::BuiltinFn::kCountOneBits:
+                out << "popcount";
+                break;
+            case core::BuiltinFn::kCountTrailingZeros:
+                out << "ctz";
+                break;
+            case core::BuiltinFn::kDpdx:
+            case core::BuiltinFn::kDpdxCoarse:
+            case core::BuiltinFn::kDpdxFine:
+                out << "dfdx";
+                break;
+            case core::BuiltinFn::kDpdy:
+            case core::BuiltinFn::kDpdyCoarse:
+            case core::BuiltinFn::kDpdyFine:
+                out << "dfdy";
+                break;
+            case core::BuiltinFn::kExtractBits:
+                out << "extract_bits";
+                break;
+            case core::BuiltinFn::kInsertBits:
+                out << "insert_bits";
+                break;
+            case core::BuiltinFn::kFwidth:
+            case core::BuiltinFn::kFwidthCoarse:
+            case core::BuiltinFn::kFwidthFine:
+                out << "fwidth";
+                break;
+            case core::BuiltinFn::kFaceForward:
+                out << "faceforward";
+                break;
+            case core::BuiltinFn::kPack4X8Snorm:
+                out << "pack_float_to_snorm4x8";
+                break;
+            case core::BuiltinFn::kPack4X8Unorm:
+                out << "pack_float_to_unorm4x8";
+                break;
+            case core::BuiltinFn::kPack2X16Snorm:
+                out << "pack_float_to_snorm2x16";
+                break;
+            case core::BuiltinFn::kPack2X16Unorm:
+                out << "pack_float_to_unorm2x16";
+                break;
+            case core::BuiltinFn::kReverseBits:
+                out << "reverse_bits";
+                break;
+            case core::BuiltinFn::kRound:
+                out << "rint";
+                break;
+            case core::BuiltinFn::kSmoothstep:
+                out << "smoothstep";
+                break;
+            case core::BuiltinFn::kInverseSqrt:
+                out << "rsqrt";
+                break;
+            case core::BuiltinFn::kUnpack4X8Snorm:
+                out << "unpack_snorm4x8_to_float";
+                break;
+            case core::BuiltinFn::kUnpack4X8Unorm:
+                out << "unpack_unorm4x8_to_float";
+                break;
+            case core::BuiltinFn::kUnpack2X16Snorm:
+                out << "unpack_snorm2x16_to_float";
+                break;
+            case core::BuiltinFn::kUnpack2X16Unorm:
+                out << "unpack_unorm2x16_to_float";
+                break;
+            default:
+                TINT_UNREACHABLE() << "unhandled: " << func;
+        }
+    }
+
+    /// Emits a user call instruction
+    void EmitUserCall(StringStream& out, const core::ir::UserCall* c) {
+        out << NameOf(c->Target()) << "(";
+        size_t i = 0;
+        for (const auto* arg : c->Args()) {
+            if (i > 0) {
+                out << ", ";
+            }
+            ++i;
+
+            EmitValue(out, arg);
+        }
         out << ")";
     }
 
     /// Emit a constructor
     void EmitConstruct(StringStream& out, const core::ir::Construct* c) {
         Switch(
-            c->Result()->Type(),
+            c->Result(0)->Type(),
             [&](const core::type::Array*) {
-                EmitType(out, c->Result()->Type());
+                EmitType(out, c->Result(0)->Type());
                 out << "{";
                 size_t i = 0;
                 for (auto* arg : c->Args()) {
@@ -524,7 +968,7 @@ class Printer : public tint::TextGenerator {
                 out << "}";
             },
             [&](Default) {
-                EmitType(out, c->Result()->Type());
+                EmitType(out, c->Result(0)->Type());
                 out << "(";
                 size_t i = 0;
                 for (auto* arg : c->Args()) {
@@ -984,6 +1428,18 @@ class Printer : public tint::TextGenerator {
                                      [&] { return UniqueIdentifier(name.substr(2)); });
         }
         return name;
+    }
+
+    /// @param value the value to get the name of
+    /// @returns the name of the given value, creating a new unique name if the value is unnamed in
+    /// the module.
+    std::string NameOf(const core::ir::Value* value) {
+        return names_.GetOrCreate(value, [&] {
+            if (auto sym = ir_.NameOf(value); sym.IsValid()) {
+                return sym.Name();
+            }
+            return UniqueIdentifier("v");
+        });
     }
 
     /// @return a new, unique identifier with the given prefix.

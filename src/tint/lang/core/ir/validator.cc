@@ -484,15 +484,15 @@ void Validator::CheckInstruction(const Instruction* inst) {
     for (size_t i = 0; i < results.Length(); ++i) {
         auto* res = results[i];
         if (!res) {
-            AddResultError(inst, i, InstError(inst, "instruction result is undefined"));
+            AddResultError(inst, i, InstError(inst, "result is undefined"));
             continue;
         }
 
-        if (res->Source() == nullptr) {
-            AddResultError(inst, i, InstError(inst, "instruction result source is undefined"));
-        } else if (res->Source() != inst) {
+        if (res->Instruction() == nullptr) {
+            AddResultError(inst, i, InstError(inst, "instruction of result is undefined"));
+        } else if (res->Instruction() != inst) {
             AddResultError(inst, i,
-                           InstError(inst, "instruction result source has wrong instruction"));
+                           InstError(inst, "instruction of result is a different instruction"));
         }
     }
 
@@ -506,14 +506,11 @@ void Validator::CheckInstruction(const Instruction* inst) {
         // Note, a `nullptr` is a valid operand in some cases, like `var` so we can't just check
         // for `nullptr` here.
         if (!op->Alive()) {
-            AddError(inst, i,
-                     InstError(inst, "instruction operand " + std::to_string(i) + " is not alive"));
+            AddError(inst, i, InstError(inst, "operand is not alive"));
         }
 
         if (!op->HasUsage(inst, i)) {
-            AddError(
-                inst, i,
-                InstError(inst, "instruction operand " + std::to_string(i) + " missing usage"));
+            AddError(inst, i, InstError(inst, "operand missing usage"));
         }
     }
 
@@ -538,7 +535,7 @@ void Validator::CheckInstruction(const Instruction* inst) {
 }
 
 void Validator::CheckVar(const Var* var) {
-    if (var->Result() && var->Initializer()) {
+    if (var->Result(0) && var->Initializer()) {
         if (var->Initializer()->Type() != var->Result(0)->Type()->UnwrapPtr()) {
             AddError(var, InstError(var, "initializer has incorrect type"));
         }

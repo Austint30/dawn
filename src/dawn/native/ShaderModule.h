@@ -120,20 +120,27 @@ struct ShaderModuleParseResult {
     std::unique_ptr<TintSource> tintSource;
 };
 
+struct ShaderModuleEntryPoint {
+    bool defaulted;
+    std::string name;
+};
+
 MaybeError ValidateAndParseShaderModule(DeviceBase* device,
-                                        const ShaderModuleDescriptor* descriptor,
+                                        const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
                                         ShaderModuleParseResult* parseResult,
                                         OwnedCompilationMessages* outMessages);
 MaybeError ValidateCompatibilityWithPipelineLayout(DeviceBase* device,
                                                    const EntryPointMetadata& entryPoint,
                                                    const PipelineLayoutBase* layout);
 
-// Return extent3D with workgroup size dimension info if it is valid
-// width = x, height = y, depthOrArrayLength = z
+// Return extent3D with workgroup size dimension info if it is valid. Also validate workgroup_size.x
+// is a multiple of maxSubgroupSizeForFullSubgroups if it holds a value.
+// width = x, height = y, depthOrArrayLength = z.
 ResultOrError<Extent3D> ValidateComputeStageWorkgroupSize(
     const tint::Program& program,
     const char* entryPointName,
-    const LimitsForCompilationRequest& limits);
+    const LimitsForCompilationRequest& limits,
+    std::optional<uint32_t> maxSubgroupSizeForFullSubgroups);
 
 RequiredBufferSizes ComputeRequiredBufferSizesForLayout(const EntryPointMetadata& entryPoint,
                                                         const PipelineLayoutBase* layout);
@@ -166,6 +173,9 @@ struct ShaderBindingInfo {
 
     BindingNumber binding;
     BindingInfoType bindingType;
+
+    // The variable name of the binding resource.
+    std::string name;
 
     BufferBindingLayout buffer;
     ShaderSamplerBindingInfo sampler;
@@ -207,9 +217,8 @@ struct EntryPointMetadata {
     std::vector<SamplerTexturePair> samplerTexturePairs;
 
     // The set of vertex attributes this entryPoint uses.
-    ityp::array<VertexAttributeLocation, VertexFormatBaseType, kMaxVertexAttributes>
-        vertexInputBaseTypes;
-    ityp::bitset<VertexAttributeLocation, kMaxVertexAttributes> usedVertexInputs;
+    PerVertexAttribute<VertexFormatBaseType> vertexInputBaseTypes;
+    VertexAttributeMask usedVertexInputs;
 
     // An array to record the basic types (float, int and uint) of the fragment shader framebuffer
     // input/outputs (inputs being "framebuffer fetch").
@@ -217,13 +226,11 @@ struct EntryPointMetadata {
         TextureComponentType baseType;
         uint8_t componentCount;
     };
-    ityp::array<ColorAttachmentIndex, FragmentRenderAttachmentInfo, kMaxColorAttachments>
-        fragmentOutputVariables;
-    ityp::bitset<ColorAttachmentIndex, kMaxColorAttachments> fragmentOutputMask;
+    PerColorAttachment<FragmentRenderAttachmentInfo> fragmentOutputVariables;
+    ColorAttachmentMask fragmentOutputMask;
 
-    ityp::array<ColorAttachmentIndex, FragmentRenderAttachmentInfo, kMaxColorAttachments>
-        fragmentInputVariables;
-    ityp::bitset<ColorAttachmentIndex, kMaxColorAttachments> fragmentInputMask;
+    PerColorAttachment<FragmentRenderAttachmentInfo> fragmentInputVariables;
+    ColorAttachmentMask fragmentInputMask;
 
     struct InterStageVariableInfo {
         std::string name;
@@ -286,9 +293,9 @@ class ShaderModuleBase : public ApiObjectBase,
                          public ContentLessObjectCacheable<ShaderModuleBase> {
   public:
     ShaderModuleBase(DeviceBase* device,
-                     const ShaderModuleDescriptor* descriptor,
+                     const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
                      ApiObjectBase::UntrackedByDeviceTag tag);
-    ShaderModuleBase(DeviceBase* device, const ShaderModuleDescriptor* descriptor);
+    ShaderModuleBase(DeviceBase* device, const UnpackedPtr<ShaderModuleDescriptor>& descriptor);
     ~ShaderModuleBase() override;
 
     static Ref<ShaderModuleBase> MakeError(DeviceBase* device, const char* label);
@@ -297,6 +304,13 @@ class ShaderModuleBase : public ApiObjectBase,
 
     // Return true iff the program has an entrypoint called `entryPoint`.
     bool HasEntryPoint(const std::string& entryPoint) const;
+
+    // Return the number of entry points for a stage.
+    size_t GetEntryPointCount(SingleShaderStage stage) const { return mEntryPointCounts[stage]; }
+
+    // Return the entry point for a stage. If no entry point name, returns the default one.
+    ShaderModuleEntryPoint ReifyEntryPointName(const char* entryPointName,
+                                               SingleShaderStage stage) const;
 
     // Return the metadata for the given `entryPoint`. HasEntryPoint with the same argument
     // must be true.
@@ -334,6 +348,8 @@ class ShaderModuleBase : public ApiObjectBase,
     std::string mWgsl;
 
     EntryPointMetadataTable mEntryPoints;
+    PerStage<std::string> mDefaultEntryPointNames;
+    PerStage<size_t> mEntryPointCounts;
     WGSLExtensionSet mEnabledWGSLExtensions;
     std::unique_ptr<tint::Program> mTintProgram;
     std::unique_ptr<TintSource> mTintSource;  // Keep the tint::Source::File alive

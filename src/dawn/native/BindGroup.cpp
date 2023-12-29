@@ -274,9 +274,6 @@ MaybeError ValidateExternalTextureBinding(
                     "External texture binding entry %u is not present in the bind group layout.",
                     entry.binding);
 
-    DAWN_TRY(ValidateSingleSType(externalTextureBindingEntry->nextInChain,
-                                 wgpu::SType::ExternalTextureBindingEntry));
-
     DAWN_TRY(device->ValidateObject(externalTextureBindingEntry->externalTexture));
 
     return {};
@@ -338,9 +335,9 @@ MaybeError ValidateBindGroupDescriptor(DeviceBase* device,
         // TODO(dawn:1293): Store external textures in
         // BindGroupLayoutBase::BindingDataPointers::bindings so checking external textures can
         // be moved in the switch below.
-        const ExternalTextureBindingEntry* externalTextureBindingEntry = nullptr;
-        FindInChain(entry.nextInChain, &externalTextureBindingEntry);
-        if (externalTextureBindingEntry != nullptr) {
+        UnpackedPtr<BindGroupEntry> unpacked;
+        DAWN_TRY_ASSIGN(unpacked, ValidateAndUnpack(&entry));
+        if (auto* externalTextureBindingEntry = unpacked.Get<ExternalTextureBindingEntry>()) {
             DAWN_TRY(
                 ValidateExternalTextureBinding(device, entry, externalTextureBindingEntry,
                                                layout->GetExternalTextureBindingExpansionMap()));
@@ -410,34 +407,34 @@ BindGroupBase::BindGroupBase(DeviceBase* device,
     }
 
     for (uint32_t i = 0; i < descriptor->entryCount; ++i) {
-        const BindGroupEntry& entry = descriptor->entries[i];
+        UnpackedPtr<BindGroupEntry> entry = Unpack(&descriptor->entries[i]);
 
-        BindingIndex bindingIndex = layout->GetBindingIndex(BindingNumber(entry.binding));
+        BindingIndex bindingIndex = layout->GetBindingIndex(BindingNumber(entry->binding));
         DAWN_ASSERT(bindingIndex < layout->GetBindingCount());
 
         // Only a single binding type should be set, so once we found it we can skip to the
         // next loop iteration.
 
-        if (entry.buffer != nullptr) {
+        if (entry->buffer != nullptr) {
             DAWN_ASSERT(mBindingData.bindings[bindingIndex] == nullptr);
-            mBindingData.bindings[bindingIndex] = entry.buffer;
-            mBindingData.bufferData[bindingIndex].offset = entry.offset;
-            uint64_t bufferSize = (entry.size == wgpu::kWholeSize)
-                                      ? entry.buffer->GetSize() - entry.offset
-                                      : entry.size;
+            mBindingData.bindings[bindingIndex] = entry->buffer;
+            mBindingData.bufferData[bindingIndex].offset = entry->offset;
+            uint64_t bufferSize = (entry->size == wgpu::kWholeSize)
+                                      ? entry->buffer->GetSize() - entry->offset
+                                      : entry->size;
             mBindingData.bufferData[bindingIndex].size = bufferSize;
             continue;
         }
 
-        if (entry.textureView != nullptr) {
+        if (entry->textureView != nullptr) {
             DAWN_ASSERT(mBindingData.bindings[bindingIndex] == nullptr);
-            mBindingData.bindings[bindingIndex] = entry.textureView;
+            mBindingData.bindings[bindingIndex] = entry->textureView;
             continue;
         }
 
-        if (entry.sampler != nullptr) {
+        if (entry->sampler != nullptr) {
             DAWN_ASSERT(mBindingData.bindings[bindingIndex] == nullptr);
-            mBindingData.bindings[bindingIndex] = entry.sampler;
+            mBindingData.bindings[bindingIndex] = entry->sampler;
             continue;
         }
 
@@ -445,15 +442,13 @@ BindGroupBase::BindGroupBase(DeviceBase* device,
         // external texture's contents. New binding locations previously determined in the bind
         // group layout are created in this bind group and filled with the external texture's
         // underlying resources.
-        const ExternalTextureBindingEntry* externalTextureBindingEntry = nullptr;
-        FindInChain(entry.nextInChain, &externalTextureBindingEntry);
-        if (externalTextureBindingEntry != nullptr) {
+        if (auto* externalTextureBindingEntry = entry.Get<ExternalTextureBindingEntry>()) {
             mBoundExternalTextures.push_back(externalTextureBindingEntry->externalTexture);
 
             ExternalTextureBindingExpansionMap expansions =
                 layout->GetExternalTextureBindingExpansionMap();
             ExternalTextureBindingExpansionMap::iterator it =
-                expansions.find(BindingNumber(entry.binding));
+                expansions.find(BindingNumber(entry->binding));
 
             DAWN_ASSERT(it != expansions.end());
 

@@ -888,6 +888,111 @@ struct BuiltinPolyfill::State {
         return name;
     }
 
+    /// Builds the polyfill function for the `dot4I8Packed` builtin
+    /// @return the polyfill function name
+    Symbol Dot4I8Packed() {
+        using vec4i = vec4<i32>;
+        using vec4u = vec4<u32>;
+
+        auto name = b.Symbols().New("tint_dot4_i8_packed");
+
+        auto body = tint::Vector{
+            // const n = vec4u(24, 16, 8, 0);
+            // let a_i8 = bitcast<vec4i>(vec4u(a) << n) >> vec4u(24);
+            // let b_i8 = bitcast<vec4i>(vec4u(b) << n) >> vec4u(24);
+            // return dot(a_i8, b_i8);
+            b.Decl(b.Const("n", b.Call<vec4u>(24_a, 16_a, 8_a, 0_a))),
+            b.Decl(b.Let("a_i8", b.Shr(b.Bitcast<vec4i>(b.Shl(b.Call<vec4u>("a"), "n")),
+                                       b.Call<vec4u>(24_a)))),
+            b.Decl(b.Let("b_i8", b.Shr(b.Bitcast<vec4i>(b.Shl(b.Call<vec4u>("b"), "n")),
+                                       b.Call<vec4u>(24_a)))),
+            b.Return(b.Call("dot", "a_i8", "b_i8")),
+        };
+        b.Func(name,
+               tint::Vector{
+                   b.Param("a", b.ty.u32()),
+                   b.Param("b", b.ty.u32()),
+               },
+               b.ty.i32(), body);
+
+        return name;
+    }
+
+    /// Builds the polyfill function for the `dot4U8Packed` builtin
+    /// @return the polyfill function name
+    Symbol Dot4U8Packed() {
+        using vec4u = vec4<u32>;
+        auto name = b.Symbols().New("tint_dot4_u8_packed");
+
+        auto body = tint::Vector{
+            // const n = vec4u(24, 16, 8, 0);
+            // let a_u8 = (vec4u(a) >> n) & vec4u(0xff);
+            // let b_u8 = (vec4u(b) >> n) & vec4u(0xff);
+            // return dot(a_u8, b_u8);
+            b.Decl(b.Const("n", b.Call<vec4u>(24_a, 16_a, 8_a, 0_a))),
+            b.Decl(b.Let("a_u8", b.And(b.Shr(b.Call<vec4u>("a"), "n"), b.Call<vec4u>(0xff_a)))),
+            b.Decl(b.Let("b_u8", b.And(b.Shr(b.Call<vec4u>("b"), "n"), b.Call<vec4u>(0xff_a)))),
+            b.Return(b.Call("dot", "a_u8", "b_u8")),
+        };
+        b.Func(name,
+               tint::Vector{
+                   b.Param("a", b.ty.u32()),
+                   b.Param("b", b.ty.u32()),
+               },
+               b.ty.u32(), body);
+
+        return name;
+    }
+
+    /// Builds the polyfill function for the `pack4xI8` builtin
+    /// @return the polyfill function name
+    Symbol Pack4xI8() {
+        using vec4i = vec4<i32>;
+        using vec4u = vec4<u32>;
+
+        auto name = b.Symbols().New("tint_pack_4xi8");
+
+        auto body = tint::Vector{
+            // const n = vec4u(0, 8, 16, 24);
+            // let a_i8 = vec4u((a & vec4i(0xff)) << n);
+            // return dot(a_i8, vec4u(1));
+            b.Decl(b.Const("n", b.Call<vec4u>(0_a, 8_a, 16_a, 24_a))),
+            b.Decl(b.Let("a_i8", b.Call<vec4u>(b.Shl(b.And("a", b.Call<vec4i>(0xff_a)), "n")))),
+            b.Return(b.Call("dot", "a_i8", b.Call<vec4u>(1_a))),
+        };
+        b.Func(name,
+               tint::Vector{
+                   b.Param("a", b.ty.vec4<i32>()),
+               },
+               b.ty.u32(), body);
+
+        return name;
+    }
+
+    /// Builds the polyfill function for the `pack4xU8` builtin
+    /// @return the polyfill function name
+    Symbol Pack4xU8() {
+        using vec4u = vec4<u32>;
+
+        auto name = b.Symbols().New("tint_pack_4xu8");
+
+        auto body = tint::Vector{
+            // const n = vec4u(0, 8, 16, 24);
+            // let a_u8 = (a & vec4u(0xff)) << n;
+            // return dot(a_u8, vec4u(1));
+            b.Decl(b.Const("n", b.Call<vec4u>(0_a, 8_a, 16_a, 24_a))),
+            b.Decl(b.Let("a_u8", b.Shl(b.And("a", b.Call<vec4u>(0xff_a)), "n"))),
+            b.Return(b.Call("dot", "a_u8", b.Call<vec4u>(1_a))),
+        };
+        b.Func(name,
+               tint::Vector{
+                   b.Param("a", b.ty.vec4<u32>()),
+               },
+               b.ty.u32(), body);
+
+        return name;
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     // Inline polyfills
     ////////////////////////////////////////////////////////////////////////////
@@ -1269,6 +1374,38 @@ struct BuiltinPolyfill::State {
                             });
                         }
                         return Symbol{};
+
+                    case wgsl::BuiltinFn::kDot4I8Packed: {
+                        if (cfg.builtins.dot_4x8_packed) {
+                            return builtin_polyfills.GetOrCreate(builtin,
+                                                                 [&] { return Dot4I8Packed(); });
+                        }
+                        return Symbol{};
+                    }
+
+                    case wgsl::BuiltinFn::kDot4U8Packed: {
+                        if (cfg.builtins.dot_4x8_packed) {
+                            return builtin_polyfills.GetOrCreate(builtin,
+                                                                 [&] { return Dot4U8Packed(); });
+                        }
+                        return Symbol{};
+                    }
+
+                    case wgsl::BuiltinFn::kPack4XI8: {
+                        if (cfg.builtins.pack_unpack_4x8) {
+                            return builtin_polyfills.GetOrCreate(builtin,
+                                                                 [&] { return Pack4xI8(); });
+                        }
+                        return Symbol{};
+                    }
+
+                    case wgsl::BuiltinFn::kPack4XU8: {
+                        if (cfg.builtins.pack_unpack_4x8) {
+                            return builtin_polyfills.GetOrCreate(builtin,
+                                                                 [&] { return Pack4xU8(); });
+                        }
+                        return Symbol{};
+                    }
 
                     default:
                         return Symbol{};

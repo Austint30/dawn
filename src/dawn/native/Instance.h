@@ -45,9 +45,11 @@
 #include "dawn/native/BlobCache.h"
 #include "dawn/native/EventManager.h"
 #include "dawn/native/Features.h"
+#include "dawn/native/Forward.h"
 #include "dawn/native/RefCountedWithExternalCount.h"
 #include "dawn/native/Toggles.h"
 #include "dawn/native/dawn_platform.h"
+#include "tint/lang/wgsl/features/language_feature.h"
 
 namespace dawn::platform {
 class Platform;
@@ -55,6 +57,7 @@ class Platform;
 
 namespace dawn::native {
 
+class AHBFunctions;
 class CallbackTaskManager;
 class DeviceBase;
 class Surface;
@@ -71,7 +74,7 @@ InstanceBase* APICreateInstance(const InstanceDescriptor* descriptor);
 // specialize this class.
 class InstanceBase final : public RefCountedWithExternalCount {
   public:
-    static Ref<InstanceBase> Create(const InstanceDescriptor* descriptor = nullptr);
+    static ResultOrError<Ref<InstanceBase>> Create(const InstanceDescriptor* descriptor = nullptr);
 
     void APIRequestAdapter(const RequestAdapterOptions* options,
                            WGPURequestAdapterCallback callback,
@@ -114,6 +117,7 @@ class InstanceBase final : public RefCountedWithExternalCount {
     }
 
     const TogglesState& GetTogglesState() const;
+    const std::unordered_set<tint::wgsl::LanguageFeature>& GetAllowedWGSLLanguageFeatures() const;
 
     // Used to query the details of a toggle. Return nullptr if toggleName is not a valid name
     // of a toggle supported in Dawn.
@@ -155,6 +159,7 @@ class InstanceBase final : public RefCountedWithExternalCount {
 
     // Get backend-independent libraries that need to be loaded dynamically.
     const X11Functions* GetOrLoadX11Functions();
+    const AHBFunctions* GetOrLoadAHBFunctions();
 
     // Dawn API
     Surface* APICreateSurface(const SurfaceDescriptor* descriptor);
@@ -162,6 +167,10 @@ class InstanceBase final : public RefCountedWithExternalCount {
     [[nodiscard]] wgpu::WaitStatus APIWaitAny(size_t count,
                                               FutureWaitInfo* futures,
                                               uint64_t timeoutNS);
+    bool APIHasWGSLLanguageFeature(wgpu::WGSLFeatureName feature) const;
+    // Always writes the full list when features is not nullptr.
+    // TODO(https://github.com/webgpu-native/webgpu-headers/issues/252): Add a count argument.
+    size_t APIEnumerateWGSLLanguageFeatures(wgpu::WGSLFeatureName* features) const;
 
   private:
     explicit InstanceBase(const TogglesState& instanceToggles);
@@ -173,7 +182,7 @@ class InstanceBase final : public RefCountedWithExternalCount {
     InstanceBase(const InstanceBase& other) = delete;
     InstanceBase& operator=(const InstanceBase& other) = delete;
 
-    MaybeError Initialize(const InstanceDescriptor* descriptor);
+    MaybeError Initialize(const UnpackedPtr<InstanceDescriptor>& descriptor);
     void SetPlatform(dawn::platform::Platform* platform);
 
     // Lazily creates connections to all backends that have been compiled, may return null even for
@@ -182,7 +191,7 @@ class InstanceBase final : public RefCountedWithExternalCount {
 
     // Enumerate physical devices according to options and return them.
     std::vector<Ref<PhysicalDeviceBase>> EnumeratePhysicalDevices(
-        const RequestAdapterOptions* options);
+        const UnpackedPtr<RequestAdapterOptions>& options);
 
     // Helper function that create adapter on given physical device handling required adapter
     // toggles descriptor.
@@ -191,6 +200,7 @@ class InstanceBase final : public RefCountedWithExternalCount {
                                    const DawnTogglesDescriptor* requiredAdapterToggles,
                                    wgpu::PowerPreference powerPreference) const;
 
+    void GatherWGSLFeatures(const DawnWGSLBlocklist* wgslBlocklist);
     void ConsumeError(std::unique_ptr<ErrorData> error);
 
     std::unordered_set<std::string> warningMessages;
@@ -212,9 +222,15 @@ class InstanceBase final : public RefCountedWithExternalCount {
     TogglesState mToggles;
     TogglesInfo mTogglesInfo;
 
+    std::unordered_set<wgpu::WGSLFeatureName> mWGSLFeatures;
+    std::unordered_set<tint::wgsl::LanguageFeature> mTintLanguageFeatures;
+
 #if defined(DAWN_USE_X11)
     std::unique_ptr<X11Functions> mX11Functions;
 #endif  // defined(DAWN_USE_X11)
+#if DAWN_PLATFORM_IS(ANDROID)
+    std::unique_ptr<AHBFunctions> mAHBFunctions;
+#endif  // DAWN_PLATFORM_IS(ANDROID)
 
     Ref<CallbackTaskManager> mCallbackTaskManager;
     EventManager mEventManager;

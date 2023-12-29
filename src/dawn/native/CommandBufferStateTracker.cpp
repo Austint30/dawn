@@ -99,10 +99,9 @@ struct TextureAliasing {
 using WritableBindingAliasingResult = std::variant<std::monostate, BufferAliasing, TextureAliasing>;
 
 template <typename Return>
-Return FindStorageBufferBindingAliasing(
-    const PipelineLayoutBase* pipelineLayout,
-    const ityp::array<BindGroupIndex, BindGroupBase*, kMaxBindGroups>& bindGroups,
-    const ityp::array<BindGroupIndex, std::vector<uint32_t>, kMaxBindGroups>& dynamicOffsets) {
+Return FindStorageBufferBindingAliasing(const PipelineLayoutBase* pipelineLayout,
+                                        const PerBindGroup<BindGroupBase*>& bindGroups,
+                                        const PerBindGroup<std::vector<uint32_t>>& dynamicOffsets) {
     // If true, returns detailed validation error info. Otherwise simply returns if any binding
     // aliasing is found.
     constexpr bool kProduceDetails = std::is_same_v<Return, WritableBindingAliasingResult>;
@@ -397,10 +396,10 @@ MaybeError CommandBufferStateTracker::ValidateBufferInRangeForVertexBuffer(uint3
 
     RenderPipelineBase* lastRenderPipeline = GetRenderPipeline();
 
-    const ityp::bitset<VertexBufferSlot, kMaxVertexBuffers>& vertexBufferSlotsUsedAsVertexBuffer =
-        lastRenderPipeline->GetVertexBufferSlotsUsedAsVertexBuffer();
+    const auto& vertexBuffersUsedAsVertexBuffer =
+        lastRenderPipeline->GetVertexBuffersUsedAsVertexBuffer();
 
-    for (auto usedSlotVertex : IterateBitSet(vertexBufferSlotsUsedAsVertexBuffer)) {
+    for (auto usedSlotVertex : IterateBitSet(vertexBuffersUsedAsVertexBuffer)) {
         const VertexBufferInfo& vertexBuffer = lastRenderPipeline->GetVertexBuffer(usedSlotVertex);
         uint64_t arrayStride = vertexBuffer.arrayStride;
         uint64_t bufferSize = mVertexBufferSizes[usedSlotVertex];
@@ -443,10 +442,10 @@ MaybeError CommandBufferStateTracker::ValidateBufferInRangeForInstanceBuffer(
 
     RenderPipelineBase* lastRenderPipeline = GetRenderPipeline();
 
-    const ityp::bitset<VertexBufferSlot, kMaxVertexBuffers>& vertexBufferSlotsUsedAsInstanceBuffer =
-        lastRenderPipeline->GetVertexBufferSlotsUsedAsInstanceBuffer();
+    const auto& vertexBuffersUsedAsInstanceBuffer =
+        lastRenderPipeline->GetVertexBuffersUsedAsInstanceBuffer();
 
-    for (auto usedSlotInstance : IterateBitSet(vertexBufferSlotsUsedAsInstanceBuffer)) {
+    for (auto usedSlotInstance : IterateBitSet(vertexBuffersUsedAsInstanceBuffer)) {
         const VertexBufferInfo& vertexBuffer =
             lastRenderPipeline->GetVertexBuffer(usedSlotInstance);
         uint64_t arrayStride = vertexBuffer.arrayStride;
@@ -548,9 +547,8 @@ void CommandBufferStateTracker::RecomputeLazyAspects(ValidationAspects aspects) 
     if (aspects[VALIDATION_ASPECT_VERTEX_BUFFERS]) {
         RenderPipelineBase* lastRenderPipeline = GetRenderPipeline();
 
-        const ityp::bitset<VertexBufferSlot, kMaxVertexBuffers>& requiredVertexBuffers =
-            lastRenderPipeline->GetVertexBufferSlotsUsed();
-        if (IsSubset(requiredVertexBuffers, mVertexBufferSlotsUsed)) {
+        const auto& requiredVertexBuffers = lastRenderPipeline->GetVertexBuffersUsed();
+        if (IsSubset(requiredVertexBuffers, mVertexBuffersUsed)) {
             mAspects.set(VALIDATION_ASPECT_VERTEX_BUFFERS);
         }
     }
@@ -601,8 +599,8 @@ MaybeError CommandBufferStateTracker::CheckMissingAspects(ValidationAspects aspe
 
     if (aspects[VALIDATION_ASPECT_VERTEX_BUFFERS]) {
         // Try to be helpful by finding one missing vertex buffer to surface in the error message.
-        const ityp::bitset<VertexBufferSlot, kMaxVertexBuffers> missingVertexBuffers =
-            GetRenderPipeline()->GetVertexBufferSlotsUsed() & ~mVertexBufferSlotsUsed;
+        const auto missingVertexBuffers =
+            GetRenderPipeline()->GetVertexBuffersUsed() & ~mVertexBuffersUsed;
         DAWN_ASSERT(missingVertexBuffers.any());
 
         VertexBufferSlot firstMissing = ityp::Sub(GetHighestBitIndexPlusOne(missingVertexBuffers),
@@ -758,13 +756,13 @@ void CommandBufferStateTracker::SetIndexBuffer(wgpu::IndexFormat format, uint64_
 }
 
 void CommandBufferStateTracker::UnsetVertexBuffer(VertexBufferSlot slot) {
-    mVertexBufferSlotsUsed.set(slot, false);
+    mVertexBuffersUsed.set(slot, false);
     mVertexBufferSizes[slot] = 0;
     mAspects.reset(VALIDATION_ASPECT_VERTEX_BUFFERS);
 }
 
 void CommandBufferStateTracker::SetVertexBuffer(VertexBufferSlot slot, uint64_t size) {
-    mVertexBufferSlotsUsed.set(slot);
+    mVertexBuffersUsed.set(slot);
     mVertexBufferSizes[slot] = size;
 }
 

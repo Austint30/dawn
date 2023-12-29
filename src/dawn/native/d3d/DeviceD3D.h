@@ -45,7 +45,7 @@ class PlatformFunctions;
 class Device : public DeviceBase {
   public:
     Device(AdapterBase* adapter,
-           const DeviceDescriptor* descriptor,
+           const UnpackedPtr<DeviceDescriptor>& descriptor,
            const TogglesState& deviceToggles);
     ~Device() override;
 
@@ -62,11 +62,12 @@ class Device : public DeviceBase {
 
     virtual ResultOrError<Ref<Fence>> CreateFence(
         const ExternalImageDXGIFenceDescriptor* descriptor) = 0;
-    virtual Ref<TextureBase> CreateD3DExternalTexture(const TextureDescriptor* descriptor,
-                                                      ComPtr<IUnknown> d3dTexture,
-                                                      std::vector<Ref<Fence>> waitFences,
-                                                      bool isSwapChainTexture,
-                                                      bool isInitialized) = 0;
+    virtual Ref<TextureBase> CreateD3DExternalTexture(
+        const UnpackedPtr<TextureDescriptor>& descriptor,
+        ComPtr<IUnknown> d3dTexture,
+        std::vector<Ref<Fence>> waitFences,
+        bool isSwapChainTexture,
+        bool isInitialized) = 0;
 
   protected:
     void DestroyImpl() override;

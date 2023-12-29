@@ -42,11 +42,12 @@ namespace dawn::native::metal {
 // static
 Ref<ComputePipeline> ComputePipeline::CreateUninitialized(
     Device* device,
-    const ComputePipelineDescriptor* descriptor) {
+    const UnpackedPtr<ComputePipelineDescriptor>& descriptor) {
     return AcquireRef(new ComputePipeline(device, descriptor));
 }
 
-ComputePipeline::ComputePipeline(DeviceBase* dev, const ComputePipelineDescriptor* desc)
+ComputePipeline::ComputePipeline(DeviceBase* dev,
+                                 const UnpackedPtr<ComputePipelineDescriptor>& desc)
     : ComputePipelineBase(dev, desc) {}
 
 ComputePipeline::~ComputePipeline() = default;
@@ -58,8 +59,15 @@ MaybeError ComputePipeline::Initialize() {
     ShaderModule::MetalFunctionData computeData;
 
     DAWN_TRY(ToBackend(computeStage.module.Get())
-                 ->CreateFunction(SingleShaderStage::Compute, computeStage, ToBackend(GetLayout()),
-                                  &computeData));
+                 ->CreateFunction(
+                     SingleShaderStage::Compute, computeStage, ToBackend(GetLayout()), &computeData,
+                     /* sampleMask */ 0xFFFFFFFF,
+                     /* renderPipeline */ nullptr,
+                     /* maxSubgroupSizeForFullSubgroups */
+                     IsFullSubgroupsRequired()
+                         ? std::make_optional(
+                               GetDevice()->GetLimits().experimentalSubgroupLimits.maxSubgroupSize)
+                         : std::nullopt));
 
     NSError* error = nullptr;
     NSRef<NSString> label = MakeDebugName(GetDevice(), "Dawn_ComputePipeline", GetLabel());
@@ -69,6 +77,10 @@ MaybeError ComputePipeline::Initialize() {
     MTLComputePipelineDescriptor* descriptor = descriptorRef.Get();
     descriptor.computeFunction = computeData.function.Get();
     descriptor.label = label.Get();
+
+    if (IsFullSubgroupsRequired()) {
+        descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = true;
+    }
 
     platform::metrics::DawnHistogramTimer timer(GetDevice()->GetPlatform());
     mMtlComputePipelineState.Acquire([mtlDevice

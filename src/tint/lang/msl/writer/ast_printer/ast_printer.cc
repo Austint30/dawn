@@ -188,6 +188,7 @@ SanitizedResult Sanitize(const Program& in, const Options& options) {
         polyfills.sign_int = true;
         polyfills.texture_sample_base_clamp_to_edge_2d_f32 = true;
         polyfills.workgroup_uniform_load = true;
+        polyfills.pack_unpack_4x8 = true;
         data.Add<ast::transform::BuiltinPolyfill::Config>(polyfills);
         manager.Add<ast::transform::BuiltinPolyfill>();
     }
@@ -275,7 +276,6 @@ bool ASTPrinter::Generate() {
             "MSL", builder_.AST(), diagnostics_,
             Vector{
                 wgsl::Extension::kChromiumDisableUniformityAnalysis,
-                wgsl::Extension::kChromiumExperimentalDp4A,
                 wgsl::Extension::kChromiumExperimentalFullPtrParameters,
                 wgsl::Extension::kChromiumExperimentalPixelLocal,
                 wgsl::Extension::kChromiumExperimentalSubgroups,
@@ -1384,8 +1384,8 @@ bool ASTPrinter::EmitDot4I8PackedCall(StringStream& out,
                                       const sem::BuiltinFn* builtin) {
     return CallBuiltinHelper(
         out, expr, builtin, [&](TextBuffer* b, const std::vector<std::string>& params) {
-            Line(b) << "packed_char4 vec1 = as_type<packed_char4>(" << params[0] << ");";
-            Line(b) << "packed_char4 vec2 = as_type<packed_char4>(" << params[1] << ");";
+            Line(b) << "char4 vec1 = as_type<char4>(" << params[0] << ");";
+            Line(b) << "char4 vec2 = as_type<char4>(" << params[1] << ");";
             Line(b) << "return vec1[0] * vec2[0] + vec1[1] * vec2[1] + vec1[2] * vec2[2] + vec1[3] "
                        "* vec2[3];";
             return true;
@@ -1397,8 +1397,8 @@ bool ASTPrinter::EmitDot4U8PackedCall(StringStream& out,
                                       const sem::BuiltinFn* builtin) {
     return CallBuiltinHelper(
         out, expr, builtin, [&](TextBuffer* b, const std::vector<std::string>& params) {
-            Line(b) << "packed_uchar4 vec1 = as_type<packed_uchar4>(" << params[0] << ");";
-            Line(b) << "packed_uchar4 vec2 = as_type<packed_uchar4>(" << params[1] << ");";
+            Line(b) << "uchar4 vec1 = as_type<uchar4>(" << params[0] << ");";
+            Line(b) << "uchar4 vec2 = as_type<uchar4>(" << params[1] << ");";
             Line(b) << "return vec1[0] * vec2[0] + vec1[1] * vec2[1] + vec1[2] * vec2[2] + vec1[3] "
                        "* vec2[3];";
             return true;
@@ -2123,6 +2123,7 @@ bool ASTPrinter::EmitLoop(const ast::LoopStatement* stmt) {
 
     TINT_SCOPED_ASSIGNMENT(emit_continuing_, emit_continuing);
     Line() << "while (true) {";
+    EmitLoopPreserver();
     {
         ScopedIndent si(this);
         if (!EmitStatements(stmt->body->statements)) {
@@ -2193,6 +2194,7 @@ bool ASTPrinter::EmitForLoop(const ast::ForLoopStatement* stmt) {
 
         TINT_SCOPED_ASSIGNMENT(emit_continuing_, emit_continuing);
         Line() << "while (true) {";
+        EmitLoopPreserver();
         IncrementIndent();
         TINT_DEFER({
             DecrementIndent();
@@ -2233,6 +2235,7 @@ bool ASTPrinter::EmitForLoop(const ast::ForLoopStatement* stmt) {
             }
             out << " {";
         }
+        EmitLoopPreserver();
         {
             auto emit_continuing = [] { return true; };
             TINT_SCOPED_ASSIGNMENT(emit_continuing_, emit_continuing);
@@ -2266,6 +2269,7 @@ bool ASTPrinter::EmitWhile(const ast::WhileStatement* stmt) {
     bool emit_as_loop = cond_pre.lines.size() > 0;
     if (emit_as_loop) {
         Line() << "while (true) {";
+        EmitLoopPreserver();
         IncrementIndent();
         TINT_DEFER({
             DecrementIndent();
@@ -2288,6 +2292,7 @@ bool ASTPrinter::EmitWhile(const ast::WhileStatement* stmt) {
             }
             out << " {";
         }
+        EmitLoopPreserver();
         if (!EmitStatementsWithIndent(stmt->body->statements)) {
             return false;
         }
@@ -3024,6 +3029,14 @@ bool ASTPrinter::EmitLet(const ast::Let* let) {
     out << ";";
 
     return true;
+}
+
+void ASTPrinter::EmitLoopPreserver() {
+    IncrementIndent();
+    // This statement prevents the MSL compiler from erasing a loop during
+    // optimimzations.
+    Line() << R"(__asm__("");)";
+    DecrementIndent();
 }
 
 template <typename F>

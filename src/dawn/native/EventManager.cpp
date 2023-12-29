@@ -34,6 +34,7 @@
 
 #include "dawn/common/Assert.h"
 #include "dawn/common/FutureUtils.h"
+#include "dawn/native/ChainUtils.h"
 #include "dawn/native/Device.h"
 #include "dawn/native/IntegerTypes.h"
 #include "dawn/native/Queue.h"
@@ -75,6 +76,10 @@ class SystemEventAndReadyStateIterator {
         return mWrappedIt - rhs.mWrappedIt;
     }
 
+    SystemEventAndReadyStateIterator operator+(difference_type rhs) {
+        return SystemEventAndReadyStateIterator{mWrappedIt + rhs};
+    }
+
     SystemEventAndReadyStateIterator& operator++() {
         ++mWrappedIt;
         return *this;
@@ -110,6 +115,7 @@ bool WaitQueueSerialsImpl(DeviceBase* device,
                 // TODO(dawn:1413): This doesn't need to be a full tick. It just needs to
                 // flush work up to `waitSerial`. This should be done after the
                 // ExecutionQueue / ExecutionContext refactor.
+                auto guard = device->GetScopedLock();
                 queue->ForceEventualFlushOfCommands();
                 DAWN_TRY(device->Tick());
             }
@@ -266,7 +272,7 @@ EventManager::~EventManager() {
     DAWN_ASSERT(!mEvents.has_value());
 }
 
-MaybeError EventManager::Initialize(const InstanceDescriptor* descriptor) {
+MaybeError EventManager::Initialize(const UnpackedPtr<InstanceDescriptor>& descriptor) {
     if (descriptor) {
         if (descriptor->features.timedWaitAnyMaxCount > kTimedWaitAnyMaxCountDefault) {
             // We don't yet support a higher timedWaitAnyMaxCount because it would be complicated

@@ -34,6 +34,7 @@
 #include <utility>
 
 #include "dawn/common/GPUInfo.h"
+#include "dawn/native/ChainUtils.h"
 #include "dawn/native/Instance.h"
 #include "dawn/native/opengl/ContextEGL.h"
 #include "dawn/native/opengl/DeviceGL.h"
@@ -399,9 +400,10 @@ void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) cons
     deviceToggles->Default(Toggle::UseBlitForBufferToStencilTextureCopy, true);
 }
 
-ResultOrError<Ref<DeviceBase>> PhysicalDevice::CreateDeviceImpl(AdapterBase* adapter,
-                                                                const DeviceDescriptor* descriptor,
-                                                                const TogglesState& deviceToggles) {
+ResultOrError<Ref<DeviceBase>> PhysicalDevice::CreateDeviceImpl(
+    AdapterBase* adapter,
+    const UnpackedPtr<DeviceDescriptor>& descriptor,
+    const TogglesState& deviceToggles) {
     EGLenum api =
         GetBackendType() == wgpu::BackendType::OpenGL ? EGL_OPENGL_API : EGL_OPENGL_ES_API;
     std::unique_ptr<Device::Context> context;
@@ -426,4 +428,10 @@ FeatureValidationResult PhysicalDevice::ValidateFeatureSupportedWithTogglesImpl(
     const TogglesState& toggles) const {
     return {};
 }
+
+void PhysicalDevice::PopulateMemoryHeapInfo(
+    AdapterPropertiesMemoryHeaps* memoryHeapProperties) const {
+    DAWN_UNREACHABLE();
+}
+
 }  // namespace dawn::native::opengl

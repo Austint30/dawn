@@ -2510,6 +2510,36 @@ Eval::Result Eval::dot(const core::type::Type*,
     return r;
 }
 
+Eval::Result Eval::dot4I8Packed(const core::type::Type* ty,
+                                VectorRef<const Value*> args,
+                                const Source& source) {
+    uint32_t packed_int8_vec4_1 = args[0]->ValueAs<u32>();
+    uint32_t packed_int8_vec4_2 = args[1]->ValueAs<u32>();
+
+    int8_t* int8_vec4_1 = reinterpret_cast<int8_t*>(&packed_int8_vec4_1);
+    int8_t* int8_vec4_2 = reinterpret_cast<int8_t*>(&packed_int8_vec4_2);
+    int32_t result = 0;
+    for (uint8_t i = 0; i < 4; ++i) {
+        result += int8_vec4_1[i] * int8_vec4_2[i];
+    }
+    return CreateScalar(source, ty, i32(result));
+}
+
+Eval::Result Eval::dot4U8Packed(const core::type::Type* ty,
+                                VectorRef<const Value*> args,
+                                const Source& source) {
+    uint32_t packed_uint8_vec4_1 = args[0]->ValueAs<u32>();
+    uint32_t packed_uint8_vec4_2 = args[1]->ValueAs<u32>();
+
+    uint8_t* uint8_vec4_1 = reinterpret_cast<uint8_t*>(&packed_uint8_vec4_1);
+    uint8_t* uint8_vec4_2 = reinterpret_cast<uint8_t*>(&packed_uint8_vec4_2);
+    uint32_t result = 0;
+    for (uint8_t i = 0; i < 4; ++i) {
+        result += uint8_vec4_1[i] * uint8_vec4_2[i];
+    }
+    return CreateScalar(source, ty, u32(result));
+}
+
 Eval::Result Eval::exp(const core::type::Type* ty,
                        VectorRef<const Value*> args,
                        const Source& source) {
@@ -3234,6 +3264,34 @@ Eval::Result Eval::pack4x8unorm(const core::type::Type* ty,
     auto e3 = calc(e->Index(3)->ValueAs<f32>());
 
     uint32_t mask = 0x0000'00ff;
+    u32 ret = u32((e0 & mask) | ((e1 & mask) << 8) | ((e2 & mask) << 16) | ((e3 & mask) << 24));
+    return CreateScalar(source, ty, ret);
+}
+
+Eval::Result Eval::pack4xI8(const core::type::Type* ty,
+                            VectorRef<const Value*> args,
+                            const Source& source) {
+    auto* e = args[0];
+    auto e0 = e->Index(0)->ValueAs<i32>();
+    auto e1 = e->Index(1)->ValueAs<i32>();
+    auto e2 = e->Index(2)->ValueAs<i32>();
+    auto e3 = e->Index(3)->ValueAs<i32>();
+
+    int32_t mask = 0xff;
+    u32 ret = u32((e0 & mask) | ((e1 & mask) << 8) | ((e2 & mask) << 16) | ((e3 & mask) << 24));
+    return CreateScalar(source, ty, ret);
+}
+
+Eval::Result Eval::pack4xU8(const core::type::Type* ty,
+                            VectorRef<const Value*> args,
+                            const Source& source) {
+    auto* e = args[0];
+    auto e0 = e->Index(0)->ValueAs<u32>();
+    auto e1 = e->Index(1)->ValueAs<u32>();
+    auto e2 = e->Index(2)->ValueAs<u32>();
+    auto e3 = e->Index(3)->ValueAs<u32>();
+
+    uint32_t mask = 0xff;
     u32 ret = u32((e0 & mask) | ((e1 & mask) << 8) | ((e2 & mask) << 16) | ((e3 & mask) << 24));
     return CreateScalar(source, ty, ret);
 }
